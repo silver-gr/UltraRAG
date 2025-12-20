@@ -74,7 +74,7 @@ class TestLLMConfig:
     def test_valid_llm_config(self):
         """Test creating a valid LLM config."""
         config = LLMConfig(
-            model="gemini-2.0-flash-exp",
+            model="gemini-3-flash-preview",
             temperature=0.1,
             max_tokens=8192
         )
@@ -119,7 +119,7 @@ class TestLLMConfig:
     def test_default_llm_config(self):
         """Test default LLM configuration values."""
         config = LLMConfig()
-        assert config.model == "gemini-2.0-flash-exp"
+        assert config.model == "gemini-3-flash-preview"
         assert config.temperature == 0.1
         assert config.max_tokens == 8192
         assert config.enable_thinking_mode is True

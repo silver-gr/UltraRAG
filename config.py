@@ -111,7 +111,7 @@ class RetrievalConfig(BaseModel):
 
 class LLMConfig(BaseModel):
     """LLM configuration."""
-    model: str = Field(default="gemini-2.0-flash-exp")
+    model: str = Field(default="gemini-3-flash-preview")
     temperature: float = Field(default=0.1)
     max_tokens: int = Field(default=8192)
     enable_thinking_mode: bool = Field(default=True)
@@ -262,7 +262,7 @@ def load_config() -> RAGConfig:
             self_correction_max_retries=int(os.getenv("SELF_CORRECTION_MAX_RETRIES", "2"))
         ),
         llm=LLMConfig(
-            model=os.getenv("LLM_MODEL", "gemini-2.0-flash-exp"),
+            model=os.getenv("LLM_MODEL", "gemini-3-flash-preview"),
             temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
             max_tokens=int(os.getenv("LLM_MAX_TOKENS", "8192"))
         ),

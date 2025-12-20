@@ -129,7 +129,7 @@ def main():
         
         with col2:
             st.subheader("🧠 Advanced AI")
-            st.write("- Gemini 2.0 Flash")
+            st.write("- Gemini 3 Flash")
             st.write("- Thinking mode")
             st.write("- Context-aware")
         

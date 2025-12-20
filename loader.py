@@ -155,33 +155,42 @@ class ObsidianLoader:
     
     def notes_to_documents(self, notes: List[ObsidianNote]) -> List[Document]:
         """Convert ObsidianNote objects to LlamaIndex Documents."""
+        import json
+
         documents = []
 
         for note in notes:
             # Create rich metadata for each document
-            # IMPORTANT: LanceDB requires flat metadata (str, int, float, None only)
-            # Convert lists to comma-separated strings, dates to ISO strings
+            # IMPORTANT: LanceDB requires CONSISTENT schema across all batches
+            # Use only fixed fields + store extra frontmatter as JSON string
             metadata = {
                 'file_path': str(note.path),
                 'file_name': note.path.name,
                 'title': note.title,
-                'tags': ', '.join(note.tags) if note.tags else '',  # Flatten list to string
-                'wikilinks': ', '.join(note.wikilinks) if note.wikilinks else '',  # Flatten list to string
+                'tags': ', '.join(note.tags) if note.tags else '',
+                'wikilinks': ', '.join(note.wikilinks) if note.wikilinks else '',
                 'num_wikilinks': len(note.wikilinks),
-                'created_date': str(note.created_date) if note.created_date else None,  # Convert date to string
-                'modified_date': str(note.modified_date) if note.modified_date else None,  # Convert date to string
+                'created_date': str(note.created_date) if note.created_date else '',
+                'modified_date': str(note.modified_date) if note.modified_date else '',
             }
 
-            # Add custom frontmatter fields (flatten any non-primitive types)
+            # Store ALL custom frontmatter in a single JSON field for schema stability
+            # This prevents LanceDB schema mismatch errors when notes have different fields
+            extra_fields = {}
             for key, value in note.metadata.items():
+                # Skip fields we already handle
+                if key in ('title', 'tags', 'created', 'modified'):
+                    continue
+                # Convert to JSON-serializable format
                 if isinstance(value, (list, tuple)):
-                    metadata[key] = ', '.join(str(v) for v in value)
-                elif isinstance(value, dict):
-                    metadata[key] = str(value)  # Convert dict to string
-                elif hasattr(value, 'isoformat'):  # datetime/date objects
-                    metadata[key] = value.isoformat()
+                    extra_fields[key] = list(value)
+                elif hasattr(value, 'isoformat'):
+                    extra_fields[key] = value.isoformat()
                 else:
-                    metadata[key] = value
+                    extra_fields[key] = value
+
+            # Store as JSON string (empty object if no extra fields)
+            metadata['extra_metadata'] = json.dumps(extra_fields) if extra_fields else '{}'
 
             # Create document with content and metadata
             doc = Document(

@@ -670,16 +670,17 @@ class HybridQueryEngine:
         else:
             logger.info("Reranker disabled (None)")
 
-        # Add similarity filter (only if threshold > 0)
-        # NOTE: Temporarily disabled - LanceDB may return scores in different format
-        # if self.config.retrieval.similarity_threshold > 0:
-        #     node_postprocessors.append(
-        #         SimilarityPostprocessor(
-        #             similarity_cutoff=self.config.retrieval.similarity_threshold
-        #         )
-        #     )
-        #     logger.info(f"Similarity filter enabled: cutoff={self.config.retrieval.similarity_threshold}")
-        logger.info("Similarity filter DISABLED for debugging")
+        # Add similarity filter (disabled by default - reranker handles relevance)
+        # LanceDB cosine similarity scores may not align with traditional 0-1 range
+        if self.config.retrieval.similarity_threshold > 0 and not self.reranker:
+            node_postprocessors.append(
+                SimilarityPostprocessor(
+                    similarity_cutoff=self.config.retrieval.similarity_threshold
+                )
+            )
+            logger.info(f"Similarity filter enabled: cutoff={self.config.retrieval.similarity_threshold}")
+        else:
+            logger.info("Similarity filter disabled (reranker handles relevance)")
 
         # Configure response synthesizer with custom prompts
         qa_prompt = PromptTemplate(PTCF_TEMPLATE)
