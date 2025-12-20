@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# Environment (contains API keys!)
+.env
+.env.local
+
+# Data (large index files)
+data/
+*.db
+*.sqlite
+*.lancedb/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# Backup files
+*.bak
+*.backup
+
+# Claude Code
+.claude/
+
+# Gemini
+.gemini-clipboard/
+
+# Large/Binary files not needed in repo
+*.pdf
+compass_artifact_*.md

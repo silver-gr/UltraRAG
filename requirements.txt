@@ -1,0 +1,46 @@
+# Core RAG Framework
+llama-index>=0.10.0
+llama-index-embeddings-voyageai
+llama-index-embeddings-huggingface
+llama-index-embeddings-openai
+llama-index-vector-stores-lancedb
+llama-index-vector-stores-qdrant
+llama-index-llms-google-genai  # New unified Google GenAI SDK
+llama-index-graph-stores-neo4j
+llama-index-retrievers-bm25
+llama-index-postprocessor-voyageai-rerank  # VoyageAI reranker
+
+# Vector Database
+lancedb>=0.5.0
+qdrant-client>=1.7.0
+
+# Graph Database
+neo4j>=5.0.0
+
+# Embeddings
+voyageai
+sentence-transformers
+
+# Document Processing
+pymupdf  # PDF processing
+python-frontmatter  # Obsidian metadata
+beautifulsoup4
+lxml
+
+# Utilities
+python-dotenv
+pydantic>=2.0.0
+pandas
+numpy
+tqdm
+
+# Evaluation (optional)
+ragas
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=4.0.0
+
+# Web Interface (optional)
+streamlit
+plotly
