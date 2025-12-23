@@ -1,6 +1,7 @@
 """Vector database initialization and management."""
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -160,11 +161,66 @@ def create_vector_index(
         raise RuntimeError(f"Failed to create vector index: {e}") from e
 
 
+def _reconstruct_nodes_from_lancedb(config: VectorDBConfig) -> list[TextNode]:
+    """Reconstruct TextNodes from LanceDB metadata.
+
+    LlamaIndex's from_vector_store() creates an empty in-memory docstore.
+    This function reconstructs nodes from the _node_content JSON stored
+    in LanceDB metadata so that hybrid search and graph retrieval work.
+
+    Args:
+        config: Vector database configuration
+
+    Returns:
+        List of TextNode objects reconstructed from LanceDB
+    """
+    import lancedb
+
+    db = lancedb.connect(str(config.lancedb_path))
+    table = db.open_table("obsidian_embeddings")
+    df = table.to_pandas()
+
+    nodes = []
+    for _, row in df.iterrows():
+        metadata = row.get('metadata', {})
+        if not metadata:
+            continue
+
+        node_content = metadata.get('_node_content')
+        if not node_content:
+            continue
+
+        try:
+            data = json.loads(node_content)
+            node = TextNode(
+                id_=data['id_'],
+                text=data['text'],
+                metadata=data.get('metadata', {}),
+                embedding=row['vector'].tolist() if row['vector'] is not None else None
+            )
+            nodes.append(node)
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Failed to reconstruct node: {e}")
+            continue
+
+    return nodes
+
+
 def load_vector_index(
     vector_store: Any,
-    embed_model: BaseEmbedding
+    embed_model: BaseEmbedding,
+    config: VectorDBConfig | None = None
 ) -> VectorStoreIndex:
-    """Load existing vector index."""
+    """Load existing vector index.
+
+    Args:
+        vector_store: The vector store to load from
+        embed_model: Embedding model for the index
+        config: Optional VectorDBConfig to enable docstore reconstruction
+
+    Returns:
+        VectorStoreIndex with populated docstore (if config provided for LanceDB)
+    """
     logger.info("Loading existing vector index")
 
     try:
@@ -177,6 +233,19 @@ def load_vector_index(
         )
 
         logger.info("Vector index loaded successfully")
+
+        # Reconstruct docstore from LanceDB metadata
+        # LlamaIndex's from_vector_store() creates an empty in-memory docstore
+        if config and config.db_type.lower() == "lancedb":
+            logger.info("Reconstructing docstore from LanceDB metadata...")
+            nodes = _reconstruct_nodes_from_lancedb(config)
+            if nodes:
+                for node in nodes:
+                    index.docstore.add_documents([node])
+                logger.info(f"Reconstructed docstore with {len(nodes)} nodes")
+            else:
+                logger.warning("No nodes found in LanceDB to reconstruct")
+
         return index
 
     except Exception as e:

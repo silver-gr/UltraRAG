@@ -115,6 +115,20 @@ class LLMConfig(BaseModel):
     temperature: float = Field(default=0.1)
     max_tokens: int = Field(default=8192)
     enable_thinking_mode: bool = Field(default=True)
+    backend: str = Field(default="api")  # "api" or "cli" (uses gemini CLI for separate quota)
+
+    @field_validator('backend')
+    @classmethod
+    def validate_backend(cls, v: str) -> str:
+        """Validate LLM backend choice."""
+        valid_backends = ["api", "cli"]
+        if v.lower() not in valid_backends:
+            raise ValueError(
+                f"backend must be one of {valid_backends}, got '{v}'. "
+                f"'api' uses Google Gemini API directly. "
+                f"'cli' uses Gemini CLI with separate free tier quota (1000/day)."
+            )
+        return v.lower()
 
     @field_validator('temperature')
     @classmethod
@@ -264,7 +278,8 @@ def load_config() -> RAGConfig:
         llm=LLMConfig(
             model=os.getenv("LLM_MODEL", "gemini-3-flash-preview"),
             temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
-            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "8192"))
+            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "8192")),
+            backend=os.getenv("LLM_BACKEND", "api")  # "api" or "cli"
         ),
         enable_checkpointing=os.getenv("ENABLE_CHECKPOINTING", "true").lower() == "true",
         voyage_api_key=SecretStr(os.getenv("VOYAGE_API_KEY", "")),

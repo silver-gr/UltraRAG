@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional, List, Set
 from llama_index.core import Settings
 from llama_index.llms.google_genai import GoogleGenAI
+from gemini_cli import GeminiCLI
 from tqdm import tqdm
 
 from config import load_config, RAGConfig
@@ -79,25 +80,35 @@ class UltraRAG:
 
     def _setup_llm(self):
         """Setup LLM for response generation."""
-        logger.info(f"Setting up LLM: {self.config.llm.model}")
-        print(f"Setting up LLM: {self.config.llm.model}")
+        backend = self.config.llm.backend
+        logger.info(f"Setting up LLM: {self.config.llm.model} (backend: {backend})")
+        print(f"Setting up LLM: {self.config.llm.model} (backend: {backend})")
 
         try:
-            # Security: Extract secret value from SecretStr
-            google_key = self.config.google_api_key.get_secret_value()
-            if not google_key:
-                logger.error("Google API key not found")
-                raise ValueError(
-                    "GOOGLE_API_KEY not found. Please set it in your .env file.\n"
-                    "Get your API key from: https://makersuite.google.com/app/apikey"
+            if backend == "cli":
+                # Use Gemini CLI for separate free tier quota (1000/day)
+                self.llm = GeminiCLI(
+                    model=self.config.llm.model,
+                    temperature=self.config.llm.temperature,
+                    max_tokens=self.config.llm.max_tokens
                 )
+                logger.info("Using Gemini CLI backend (free tier: 1000 requests/day)")
+            else:
+                # Use Google Gemini API directly
+                google_key = self.config.google_api_key.get_secret_value()
+                if not google_key:
+                    logger.error("Google API key not found")
+                    raise ValueError(
+                        "GOOGLE_API_KEY not found. Please set it in your .env file.\n"
+                        "Get your API key from: https://makersuite.google.com/app/apikey"
+                    )
 
-            self.llm = GoogleGenAI(
-                model=self.config.llm.model,
-                api_key=google_key,
-                temperature=self.config.llm.temperature,
-                max_tokens=self.config.llm.max_tokens
-            )
+                self.llm = GoogleGenAI(
+                    model=self.config.llm.model,
+                    api_key=google_key,
+                    temperature=self.config.llm.temperature,
+                    max_tokens=self.config.llm.max_tokens
+                )
 
             Settings.llm = self.llm
             logger.debug("LLM setup completed successfully")
@@ -264,7 +275,8 @@ class UltraRAG:
 
             self.index = load_vector_index(
                 vector_store=self.vector_store,
-                embed_model=self.embed_model
+                embed_model=self.embed_model,
+                config=self.config.vector_db
             )
 
             print("Index loaded successfully!")
