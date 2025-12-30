@@ -2,7 +2,7 @@
 
 Based on analysis of [Khoj AI](https://github.com/khoj-ai/khoj) - a 32K-star open-source AI assistant.
 
-## Feature 1: Iterative Retrieval Mode (Research Mode) ⭐⭐⭐
+## Feature 1: Iterative Retrieval Mode (Research Mode) ✅ IMPLEMENTED
 
 ### What Khoj Does
 - `/research` command triggers multi-step retrieval
@@ -10,17 +10,18 @@ Based on analysis of [Khoj AI](https://github.com/khoj-ai/khoj) - a 32K-star ope
 - **Benchmark results**: 141% accuracy improvement (27% → 63.5% on FRAMES benchmark)
 - Metaphor: "Take-home exam" vs "open book exam"
 
-### Implementation Plan for UltraRAG
+### UltraRAG Implementation
 
-#### New File: `research_mode.py`
+#### File: `research_mode.py`
 ```python
 class ResearchRetriever:
     """Iterative retrieval with query refinement based on initial results."""
 
-    def __init__(self, base_retriever, llm, max_iterations=3):
+    def __init__(self, base_retriever, llm, max_iterations=3, confidence_threshold=0.8):
         self.base_retriever = base_retriever
         self.llm = llm
         self.max_iterations = max_iterations
+        self.confidence_threshold = confidence_threshold
 
     def research(self, query: str) -> ResearchResult:
         """
@@ -30,9 +31,8 @@ class ResearchRetriever:
         3. Generate refined sub-queries for missing info
         4. Retrieve again with sub-queries
         5. Repeat until satisfied or max iterations
-        6. Synthesize final answer from all retrieved content
+        6. Return aggregated, deduplicated results
         """
-        pass
 ```
 
 #### Key Components
@@ -40,12 +40,12 @@ class ResearchRetriever:
 2. **Sub-Query Generation**: Create targeted queries for gaps
 3. **Result Aggregation**: Combine results across iterations, deduplicate
 4. **Confidence Scoring**: Track when enough information has been gathered
-5. **Citation Tracking**: Track which iteration found each piece of info
+5. **Iteration Tracking**: Summary of what each iteration found
 
-#### CLI/Web Integration
-- CLI: `@research <query>` prefix (like `@vault`, `@conv`)
-- Web: Add "Research Mode" toggle or button
-- Longer timeout (research takes 30-60s vs 2-5s normal)
+#### Usage
+- **CLI**: `@research <query>` prefix
+- **Web**: 🔬 Research checkbox (warns about 30-60s duration)
+- **Config**: `research_max_iterations=3`, `research_confidence_threshold=0.8`
 
 #### Trade-offs
 - **Pros**: Much higher accuracy for complex questions
@@ -53,29 +53,28 @@ class ResearchRetriever:
 
 ---
 
-## Feature 2: Automated Evaluation (RAGAS) ⭐⭐⭐
+## Feature 2: Automated Evaluation (RAGAS) ✅ IMPLEMENTED
 
 ### What Khoj Does
 - Runs FRAMES and SimpleQA benchmarks on every GitHub release
 - Automated evaluation harness measures retrieval quality objectively
 - Catches regressions before they ship
 
-### Implementation Plan for UltraRAG
+### UltraRAG Implementation
 
-#### New File: `evaluation.py`
+#### File: `evaluation.py`
 ```python
 class RAGEvaluator:
     """Automated evaluation using RAGAS metrics."""
 
     def evaluate(self, test_cases: List[TestCase]) -> EvaluationReport:
         """
-        Metrics to compute:
+        Metrics computed:
         - Faithfulness: Is the answer grounded in retrieved context?
         - Answer Relevancy: Does the answer address the question?
         - Context Precision: Are retrieved docs relevant?
         - Context Recall: Did we retrieve all needed docs?
         """
-        pass
 ```
 
 #### RAGAS Metrics
@@ -87,38 +86,17 @@ class RAGEvaluator:
 | **Context Recall** | All needed docs were retrieved |
 
 #### Test Dataset
-Create `tests/evaluation_dataset.json`:
-```json
-[
-  {
-    "question": "What are my notes about machine learning?",
-    "ground_truth": "...",
-    "expected_sources": ["ML Notes.md", "AI Research.md"]
-  }
-]
-```
+Located at `tests/evaluation_dataset.json` with 10 sample test cases.
 
-#### CLI Command
+#### Usage
 ```bash
-python -m ultrarag.evaluate --dataset tests/evaluation_dataset.json
+# Run evaluation
+python -m evaluation --dataset tests/evaluation_dataset.json
+
+# Output: JSON report + CSV with per-question scores
 ```
 
-#### GitHub Actions Integration
-```yaml
-# .github/workflows/evaluate.yml
-on:
-  release:
-    types: [published]
-jobs:
-  evaluate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run RAGAS evaluation
-        run: python -m ultrarag.evaluate
-```
-
-#### Dependencies
+#### Dependencies (added to requirements.txt)
 ```
 ragas>=0.1.0
 datasets>=2.14.0
@@ -126,12 +104,12 @@ datasets>=2.14.0
 
 ---
 
-## Implementation Priority
+## Implementation Status
 
-| Feature | Effort | Impact | Priority |
-|---------|--------|--------|----------|
-| Research Mode | Medium | High (141% accuracy boost) | 1 |
-| RAGAS Evaluation | Low-Medium | High (quality assurance) | 2 |
+| Feature | Status | Files |
+|---------|--------|-------|
+| Research Mode | ✅ Done | `research_mode.py`, `main.py`, `app.py`, `config.py` |
+| RAGAS Evaluation | ✅ Done | `evaluation.py`, `tests/evaluation_dataset.json`, `docs/EVALUATION.md` |
 
 ## References
 

@@ -56,6 +56,14 @@ query_transform.py → query_engine.py → self_correction.py → LLM response
 - **query_engine.py**: `RAGQueryEngine`, `HybridQueryEngine`, reranking, caching
 - **self_correction.py**: Self-RAG/CRAG patterns with relevance grading
 
+### Research Mode (Iterative Retrieval)
+```
+research_mode.py → multi-step retrieval → gap analysis → refined queries
+```
+- **research_mode.py**: `ResearchRetriever` performs iterative retrieval with LLM-powered gap analysis
+- Activates via `@research <query>` in CLI or 🔬 checkbox in web UI
+- Config: `research_max_iterations=3`, `research_confidence_threshold=0.8`
+
 ### Federated Retrieval (AI Conversations)
 ```
 conversation_loader.py → federated_query.py → merged results
@@ -131,7 +139,17 @@ Then set `LLM_BACKEND=cli` in your .env file.
 - Retrieval: top_k=75 → rerank to top_n=10
 - Similarity threshold: 0.3 (only applied when no reranker is configured)
 
+## RAGAS Evaluation
+Run automated evaluation with RAGAS metrics:
+```bash
+# Run evaluation against test dataset
+python -m evaluation --dataset tests/evaluation_dataset.json
+
+# Metrics: faithfulness, answer_relevancy, context_precision, context_recall
+```
+
 ## Documentation
 Extended documentation is in `docs/`:
 - `docs/ARCHITECTURE.md` - System diagrams and data flow
+- `docs/EVALUATION.md` - RAGAS evaluation setup and usage
 - `docs/features/` - Feature guides (late chunking, query transformation, self-correction, graph retrieval)
