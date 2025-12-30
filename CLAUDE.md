@@ -56,6 +56,13 @@ query_transform.py → query_engine.py → self_correction.py → LLM response
 - **query_engine.py**: `RAGQueryEngine`, `HybridQueryEngine`, reranking, caching
 - **self_correction.py**: Self-RAG/CRAG patterns with relevance grading
 
+### Federated Retrieval (AI Conversations)
+```
+conversation_loader.py → federated_query.py → merged results
+```
+- **conversation_loader.py**: Parses ChatGPT/Claude/Gemini exports, turn-aware chunking
+- **federated_query.py**: `FederatedQueryEngine` queries vault + conversations indexes in parallel, merges with configurable weights
+
 ### Configuration
 - **config.py**: Pydantic models (`RAGConfig`, `EmbeddingConfig`, `LLMConfig`, etc.)
 - **.env**: Runtime configuration (copy from `.env.example`)
@@ -74,6 +81,9 @@ query_transform.py → query_engine.py → self_correction.py → LLM response
 ### Checkpointing
 Indexing uses checkpoints (`data/index_checkpoint.json`) for recovery if interrupted.
 
+### Docstore Reconstruction
+When loading a persisted LanceDB index, `vector_store.py:_reconstruct_nodes_from_lancedb()` rebuilds the docstore from `_node_content` metadata stored in vectors. This enables hybrid search and graph retrieval which require full node access beyond just embeddings.
+
 ## Test Markers
 ```bash
 pytest -m "not slow"      # Skip slow tests
@@ -82,10 +92,19 @@ pytest -m unit            # Unit tests only
 ```
 
 ## Data Directories
-- `data/lancedb/` - Vector index
+- `data/lancedb/` - Vector index (tables: `vectors` for vault, `conversations` for AI chats)
 - `data/embedding_cache/` - Cached embeddings
 - `data/voyage_usage.json` - API token tracking
 - `data/index_checkpoint.json` - Indexing checkpoint
+
+## AI Conversations Integration
+Enable federated search across vault + AI conversation exports:
+```bash
+CONVERSATIONS_ENABLED=true
+CONVERSATIONS_PATH=/path/to/ai-conversation-toolkit/output
+```
+CLI query prefixes: `@vault`, `@conv`, `@all` to filter search scope.
+Compatible with exports from [AI Conversation Toolkit](https://github.com/silver-gr/ai-conversation-toolkit).
 
 ## LLM Backend Options
 
@@ -110,3 +129,9 @@ Then set `LLM_BACKEND=cli` in your .env file.
 - Reranker: `rerank-2.5`
 - Chunk size: 512 tokens, overlap: 75
 - Retrieval: top_k=75 → rerank to top_n=10
+- Similarity threshold: 0.3 (only applied when no reranker is configured)
+
+## Documentation
+Extended documentation is in `docs/`:
+- `docs/ARCHITECTURE.md` - System diagrams and data flow
+- `docs/features/` - Feature guides (late chunking, query transformation, self-correction, graph retrieval)
