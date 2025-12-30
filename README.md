@@ -2,6 +2,8 @@
 
 A sophisticated Retrieval-Augmented Generation (RAG) system specifically designed for personal Obsidian knowledge bases. Implements state-of-the-art techniques from 2024-2025 research including semantic chunking, hybrid retrieval, graph-based search, and advanced reranking.
 
+![UltraRAG Web Interface](docs/app.png)
+
 ## Features
 
 ### Phase 1: Core RAG (Implemented)
