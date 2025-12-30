@@ -20,6 +20,7 @@ A sophisticated Retrieval-Augmented Generation (RAG) system specifically designe
 - ✅ **Query Transformation**: HyDE, Multi-Query expansion, or both for significantly better retrieval
 - ✅ **PTCF Prompting**: Research-backed prompt engineering for Gemini 2.0
 - ✅ **Wikilink Graph**: Builds knowledge graph from note connections
+- ✅ **AI Conversations RAG**: Federated search across your vault AND past AI conversations (ChatGPT, Claude, Gemini)
 
 ### Phase 2: Advanced Features (Coming Soon)
 - 🔄 Graph-based retrieval with Neo4j
@@ -161,6 +162,37 @@ Query transformation significantly improves retrieval by bridging the query-docu
 - Direct query embedding without transformation
 - Fastest but lower quality retrieval
 - Best for: When speed matters more than quality
+
+## AI Conversations Integration
+
+UltraRAG can index and search your past AI conversations alongside your Obsidian vault using **federated retrieval**. This means you can query both your personal notes AND your ChatGPT/Claude/Gemini conversation history in a single search.
+
+### Setup
+
+1. **Export your AI conversations** using [AI Conversation Toolkit](https://github.com/silver-gr/ai-conversation-toolkit)
+
+2. **Configure UltraRAG** to use your exports:
+```bash
+# In your .env file
+CONVERSATIONS_ENABLED=true
+CONVERSATIONS_PATH=/path/to/ai-conversation-toolkit/output
+CONVERSATIONS_WEIGHT=0.8  # Score weight vs vault (vault=1.0)
+```
+
+3. **Index and search**:
+   - **CLI**: Type `conv` to index conversations, then use `@vault`, `@conv`, or `@all` prefixes
+   - **Web**: Click "Index Conversations" in sidebar, then use the search scope toggle
+
+### Search Scopes
+
+| Prefix | Scope | Description |
+|--------|-------|-------------|
+| (none) | Both | Federated search across vault + conversations |
+| `@vault` | Vault only | Search only your Obsidian notes |
+| `@conv` | Conversations | Search only AI conversation history |
+| `@all` | Both | Explicit federated search |
+
+Results are tagged with 📓 (vault) or 💬 (conversation) so you know the source.
 
 ## Usage
 
