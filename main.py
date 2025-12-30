@@ -25,6 +25,8 @@ from query_engine import RAGQueryEngine, HybridQueryEngine
 from query_transform import QueryTransformer
 from cache import EmbeddingCache
 from token_tracker import get_tracker
+from conversation_loader import ConversationLoader, ConversationChunker
+from federated_query import FederatedQueryEngine, IndexSource
 
 # Configure logging
 logging.basicConfig(
@@ -71,6 +73,12 @@ class UltraRAG:
             self.nodes = None  # Store nodes for BM25 retrieval
             self.bm25_retriever = None  # Store BM25 retriever
             self.loader = ObsidianLoader(self.config.vault_path)
+
+            # Conversation index (federated retrieval)
+            self.conversations_index = None
+            self.conversations_nodes = None
+            self.conversations_vector_store = None
+            self.federated_engine = None
 
             logger.info("UltraRAG system initialized successfully")
 
@@ -309,11 +317,34 @@ class UltraRAG:
             # Setup query engine
             self._setup_query_engine()
 
+            # Auto-load conversations index if enabled
+            if self.config.conversations.enabled and self.config.conversations.path:
+                self._auto_load_conversations()
+
             return True
 
         except Exception as e:
             print(f"Failed to load existing index: {e}")
             return False
+
+    def _auto_load_conversations(self):
+        """Auto-load or index conversations if enabled in config."""
+        conv_path = self.config.conversations.path
+
+        if not conv_path or not conv_path.exists():
+            logger.info(f"Conversations path not found: {conv_path}")
+            return
+
+        # Check if conversations index exists
+        if self.conversations_index_exists():
+            print("\n📚 Loading conversations index...")
+            if self.load_conversations_index():
+                self._setup_federated_engine()
+                print("✅ Federated search enabled (vault + conversations)")
+        else:
+            # Auto-index conversations (non-interactive mode)
+            print(f"\n📚 Auto-indexing conversations from: {conv_path}")
+            self.index_conversations(conv_path, force_reindex=False, interactive=False)
 
     def index_vault(self, force_reindex: bool = False, batch_size: Optional[int] = None):
         """Index the entire Obsidian vault with batch processing and checkpointing.
@@ -558,7 +589,9 @@ class UltraRAG:
                 'title': node.metadata.get('title', 'Unknown'),
                 'file': node.metadata.get('file_name', 'Unknown'),
                 'score': node.score,
-                'excerpt': node.text[:200] + "..."
+                'excerpt': node.text[:200] + "...",
+                'source_type': node.metadata.get('source_type', 'vault'),
+                'retrieval_source': node.metadata.get('retrieval_source', 'vault')
             })
         return sources
     
@@ -575,6 +608,322 @@ class UltraRAG:
 
         nodes = engine.get_relevant_nodes(query_str, top_k=top_k)
         return self._format_sources(nodes)
+
+    def _setup_conversations_vector_store(self, mode: str = "create"):
+        """Setup vector store for conversations index."""
+        import lancedb
+
+        # Use same LanceDB path but different table
+        db_path = self.config.vector_db.lancedb_path
+        table_name = self.config.vector_db.conversations_table
+
+        logger.info(f"Setting up conversations vector store: {db_path}/{table_name}")
+
+        db = lancedb.connect(str(db_path))
+
+        # Check if table exists
+        existing_tables = db.table_names()
+        table_exists = table_name in existing_tables
+
+        if mode == "overwrite" and table_exists:
+            db.drop_table(table_name)
+            table_exists = False
+
+        from llama_index.vector_stores.lancedb import LanceDBVectorStore
+
+        self.conversations_vector_store = LanceDBVectorStore(
+            uri=str(db_path),
+            table_name=table_name,
+            mode="overwrite" if not table_exists else "append"
+        )
+
+        return table_exists
+
+    def conversations_index_exists(self) -> bool:
+        """Check if conversations index exists."""
+        import lancedb
+
+        try:
+            db_path = self.config.vector_db.lancedb_path
+            table_name = self.config.vector_db.conversations_table
+
+            if not db_path.exists():
+                return False
+
+            db = lancedb.connect(str(db_path))
+            return table_name in db.table_names()
+        except Exception:
+            return False
+
+    def index_conversations(
+        self,
+        conversations_path: Optional[Path] = None,
+        force_reindex: bool = False,
+        batch_size: int = 50,
+        interactive: bool = True
+    ):
+        """Index AI conversation exports for federated retrieval.
+
+        Args:
+            conversations_path: Path to conversations directory (defaults to config)
+            force_reindex: Force recreation of index
+            batch_size: Number of conversations per batch
+            interactive: If True, prompt for choices; if False, auto-load existing
+        """
+        print("\n=== Indexing AI Conversations ===")
+
+        # Determine path
+        conv_path = conversations_path or self.config.conversations.path
+        if not conv_path:
+            print("❌ No conversations path specified.")
+            print("Set CONVERSATIONS_PATH in .env or pass conversations_path argument.")
+            return
+
+        conv_path = Path(conv_path)
+        if not conv_path.exists():
+            print(f"❌ Conversations path not found: {conv_path}")
+            return
+
+        # Check for existing index
+        if not force_reindex and self.conversations_index_exists():
+            if interactive:
+                print("\nExisting conversations index found.")
+                print("Options:")
+                print("  1. Load existing (fast)")
+                print("  2. Recreate (slow)")
+                print("  3. Cancel")
+
+                choice = input("\nChoice (1/2/3): ").strip()
+                if choice == "1":
+                    if self.load_conversations_index():
+                        print("Conversations index loaded!")
+                        self._setup_federated_engine()
+                        return
+                    print("Failed to load. Recreating...")
+                elif choice == "3":
+                    return
+                # choice == "2" continues to recreate
+            else:
+                # Non-interactive: just load existing
+                if self.load_conversations_index():
+                    print("Conversations index loaded!")
+                    self._setup_federated_engine()
+                    return
+                print("Failed to load. Will create new index...")
+
+        # Setup vector store
+        mode = "overwrite" if force_reindex or self.conversations_index_exists() else "create"
+        self._setup_conversations_vector_store(mode=mode)
+
+        # Load conversations
+        print(f"\nLoading conversations from: {conv_path}")
+        conv_loader = ConversationLoader(conv_path)
+
+        try:
+            conversations = conv_loader.load_all_conversations()
+        except Exception as e:
+            print(f"❌ Error loading conversations: {e}")
+            return
+
+        if not conversations:
+            print("No conversations found!")
+            return
+
+        print(f"Found {len(conversations)} conversations")
+
+        # Convert to documents
+        print("Converting to documents...")
+        documents = conv_loader.conversations_to_documents(
+            conversations,
+            include_full_context=True
+        )
+
+        # Chunk with conversation-aware strategy
+        print("Chunking conversations...")
+        chunker = ConversationChunker(
+            chunk_size=self.config.embedding.chunk_size,
+            chunk_overlap=self.config.embedding.chunk_overlap,
+            respect_turn_boundaries=True
+        )
+
+        all_nodes = []
+        total_batches = (len(documents) + batch_size - 1) // batch_size
+
+        for batch_idx in range(0, len(documents), batch_size):
+            batch_num = batch_idx // batch_size + 1
+            batch_docs = documents[batch_idx:batch_idx + batch_size]
+
+            print(f"\n--- Batch {batch_num}/{total_batches} ---")
+
+            try:
+                batch_nodes = chunker.chunk_documents(batch_docs)
+                print(f"Created {len(batch_nodes)} chunks")
+
+                if self.conversations_index is None:
+                    print("Creating conversations index...")
+                    self.conversations_index = create_vector_index(
+                        nodes=batch_nodes,
+                        vector_store=self.conversations_vector_store,
+                        embed_model=self.embed_model,
+                        show_progress=True
+                    )
+                else:
+                    print("Adding to conversations index...")
+                    self.conversations_index.insert_nodes(batch_nodes, show_progress=True)
+
+                all_nodes.extend(batch_nodes)
+
+            except Exception as e:
+                logger.error(f"Error in batch {batch_num}: {e}", exc_info=True)
+                print(f"Warning: Error in batch {batch_num}: {e}")
+                continue
+
+        self.conversations_nodes = all_nodes
+        print(f"\n✅ Indexed {len(all_nodes)} conversation chunks!")
+
+        # Setup federated engine if vault index exists
+        if self.index is not None:
+            self._setup_federated_engine()
+
+    def load_conversations_index(self) -> bool:
+        """Load existing conversations index."""
+        if not self.conversations_index_exists():
+            return False
+
+        try:
+            print("Loading conversations index...")
+
+            # Setup vector store in append mode
+            self._setup_conversations_vector_store(mode="append")
+
+            # Load index
+            from llama_index.core import StorageContext
+
+            storage_context = StorageContext.from_defaults(
+                vector_store=self.conversations_vector_store
+            )
+
+            from llama_index.core import VectorStoreIndex
+
+            self.conversations_index = VectorStoreIndex.from_vector_store(
+                vector_store=self.conversations_vector_store,
+                embed_model=self.embed_model,
+                storage_context=storage_context
+            )
+
+            # Get nodes for BM25
+            docstore = self.conversations_index.docstore
+            self.conversations_nodes = list(docstore.docs.values())
+            print(f"Loaded {len(self.conversations_nodes)} conversation nodes")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to load conversations index: {e}", exc_info=True)
+            return False
+
+    def _setup_federated_engine(self):
+        """Setup federated query engine for both indexes."""
+        if self.index is None:
+            logger.warning("Vault index not available for federated engine")
+            return
+
+        sources = []
+
+        # Vault source
+        sources.append(IndexSource(
+            name="vault",
+            index=self.index,
+            source_type="vault",
+            weight=1.0,
+            nodes=self.nodes,
+            wikilink_graph=getattr(self, 'wikilink_graph', {})
+        ))
+
+        # Conversations source
+        if self.conversations_index is not None:
+            sources.append(IndexSource(
+                name="conversations",
+                index=self.conversations_index,
+                source_type="conversations",
+                weight=self.config.conversations.weight,
+                nodes=self.conversations_nodes
+            ))
+
+        if len(sources) > 1:
+            self.federated_engine = FederatedQueryEngine(
+                sources=sources,
+                config=self.config,
+                reranker=self.reranker,
+                query_transformer=self.query_transformer
+            )
+            print(f"Federated engine ready with {len(sources)} sources")
+        else:
+            logger.info("Only one source available, federated engine not needed")
+
+    def query_federated(
+        self,
+        query_str: str,
+        source_filter: Optional[List[str]] = None,
+        return_sources: bool = True
+    ):
+        """Query both vault and conversations with federated retrieval.
+
+        Args:
+            query_str: Query string
+            source_filter: Optional list of sources ("vault", "conversations")
+            return_sources: Include source information in response
+        """
+        if self.federated_engine is None:
+            # Fallback to regular query if no federated engine
+            if self.conversations_index is not None and self.index is not None:
+                self._setup_federated_engine()
+
+            if self.federated_engine is None:
+                logger.warning("Federated engine not available, using standard query")
+                return self.query(query_str, return_sources=return_sources)
+
+        print(f"\n🔍 Federated Query: {query_str}")
+        print("Searching vault and conversations...\n")
+
+        try:
+            response = self.federated_engine.query(
+                query_str,
+                source_filter=source_filter
+            )
+
+            if return_sources:
+                # Include source summary
+                source_summary = response.metadata.get('source_summary', {}) if hasattr(response, 'metadata') else {}
+
+                return {
+                    'answer': str(response),
+                    'sources': self._format_sources(response.source_nodes),
+                    'source_summary': source_summary,
+                    'raw_response': response
+                }
+
+            return str(response)
+
+        except Exception as e:
+            logger.error(f"Federated query failed: {e}", exc_info=True)
+            raise RuntimeError(f"Federated query failed: {e}") from e
+
+    def query_vault_only(self, query_str: str, return_sources: bool = True):
+        """Query only the vault index (exclude conversations)."""
+        return self.query_federated(
+            query_str,
+            source_filter=["vault"],
+            return_sources=return_sources
+        )
+
+    def query_conversations_only(self, query_str: str, return_sources: bool = True):
+        """Query only the conversations index."""
+        return self.query_federated(
+            query_str,
+            source_filter=["conversations"],
+            return_sources=return_sources
+        )
 
     def get_token_usage(self) -> dict:
         """Get current Voyage AI token usage statistics."""
@@ -685,10 +1034,24 @@ def main():
         print("\nNo index available. Exiting.")
         sys.exit(1)
 
+    # Check for conversations index
+    has_conv_index = rag.conversations_index_exists()
+    if has_conv_index:
+        print("\n📚 Conversations index detected!")
+        if rag.load_conversations_index():
+            rag._setup_federated_engine()
+            print("Federated search enabled (vault + conversations)")
+
     # Interactive query loop
     print("\n" + "="*50)
     print("RAG system ready!")
-    print("Commands: 'quit' to exit, 'usage' to check token usage")
+    print("Commands:")
+    print("  'quit' - exit")
+    print("  'usage' - check token usage")
+    print("  'conv' - index AI conversations")
+    print("  '@vault <query>' - search vault only")
+    print("  '@conv <query>' - search conversations only")
+    print("  '@all <query>' - search both (federated)")
     print("="*50 + "\n")
 
     while True:
@@ -701,20 +1064,58 @@ def main():
             rag.print_token_usage()
             continue
 
+        if query.lower() == 'conv':
+            # Index conversations
+            conv_path = input("Conversations path (or Enter for default): ").strip()
+            if conv_path:
+                rag.index_conversations(Path(conv_path))
+            else:
+                rag.index_conversations()
+            continue
+
         if not query:
             continue
 
         try:
-            result = rag.query(query)
+            # Parse query modifiers
+            if query.startswith('@vault '):
+                query_text = query[7:]
+                result = rag.query_vault_only(query_text)
+                mode = "vault"
+            elif query.startswith('@conv '):
+                query_text = query[6:]
+                result = rag.query_conversations_only(query_text)
+                mode = "conversations"
+            elif query.startswith('@all '):
+                query_text = query[5:]
+                result = rag.query_federated(query_text)
+                mode = "federated"
+            else:
+                # Default: use federated if available, otherwise vault only
+                if rag.federated_engine is not None:
+                    result = rag.query_federated(query)
+                    mode = "federated"
+                else:
+                    result = rag.query(query)
+                    mode = "vault"
 
-            print("\n📝 Answer:")
+            print(f"\n📝 Answer ({mode} search):")
             print("-" * 50)
             print(result['answer'])
+
+            # Show source summary for federated queries
+            if mode == "federated" and 'source_summary' in result:
+                summary = result['source_summary']
+                if summary:
+                    by_type = summary.get('by_type', {})
+                    print(f"\n📊 Sources: {by_type.get('vault', 0)} from vault, {by_type.get('conversations', 0)} from conversations")
 
             print("\n📚 Sources:")
             print("-" * 50)
             for source in result['sources'][:5]:
-                print(f"{source['rank']}. {source['title']} (score: {source['score']:.3f})")
+                source_type = source.get('source_type', 'vault')
+                type_icon = "📓" if source_type == "vault" else "💬"
+                print(f"{source['rank']}. {type_icon} {source['title']} (score: {source['score']:.3f})")
                 print(f"   {source['excerpt']}\n")
 
         except KeyboardInterrupt:

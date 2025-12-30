@@ -22,6 +22,8 @@ if 'indexed' not in st.session_state:
     st.session_state.indexed = False
 if 'history' not in st.session_state:
     st.session_state.history = []
+if 'conversations_indexed' not in st.session_state:
+    st.session_state.conversations_indexed = False
 
 
 def main():
@@ -90,18 +92,54 @@ def main():
                     except Exception as e:
                         st.error(f"❌ Error: {e}")
         
+        # Conversations section
+        if st.session_state.rag and st.session_state.indexed:
+            st.divider()
+            st.subheader("💬 AI Conversations")
+
+            # Check for conversations config
+            config = st.session_state.rag.config
+            has_conv_path = config.conversations.path and config.conversations.path.exists()
+            has_conv_index = st.session_state.rag.conversations_index_exists()
+
+            if has_conv_index or st.session_state.conversations_indexed:
+                st.success("🟢 Conversations indexed")
+                st.session_state.conversations_indexed = True
+
+                # Load if not already
+                if st.session_state.rag.conversations_index is None:
+                    st.session_state.rag.load_conversations_index()
+                    st.session_state.rag._setup_federated_engine()
+
+            elif has_conv_path:
+                st.info(f"📁 Found: {config.conversations.path}")
+                if st.button("📚 Index Conversations"):
+                    with st.spinner("Indexing AI conversations..."):
+                        try:
+                            st.session_state.rag.index_conversations(force_reindex=False, interactive=False)
+                            st.session_state.conversations_indexed = True
+                            st.success("✅ Conversations indexed!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Error: {e}")
+            else:
+                st.info("Set CONVERSATIONS_PATH in .env")
+
         # System status
         st.divider()
         st.subheader("📊 System Status")
-        
+
         if st.session_state.rag:
             config = st.session_state.rag.config
             st.metric("Embedding Model", config.embedding.model)
             st.metric("Vector DB", config.vector_db.db_type.upper())
             st.metric("LLM", config.llm.model)
-            
+
             if st.session_state.indexed:
-                st.success("🟢 Ready to query")
+                if st.session_state.conversations_indexed:
+                    st.success("🟢 Federated search ready")
+                else:
+                    st.success("🟢 Vault ready")
             else:
                 st.warning("🟡 Not indexed yet")
         else:
@@ -150,7 +188,7 @@ def main():
             max_chars=10000  # Security: Limit query length
         )
 
-        col1, col2 = st.columns([1, 4])
+        col1, col2, col3 = st.columns([1, 2, 2])
         with col1:
             search_button = st.button("🔍 Search", type="primary", use_container_width=True)
         with col2:
@@ -160,6 +198,18 @@ def main():
                 horizontal=True,
                 label_visibility="collapsed"
             )
+        with col3:
+            # Search scope (only show if conversations indexed)
+            if st.session_state.conversations_indexed:
+                search_scope = st.radio(
+                    "Search scope:",
+                    ["📓 Vault Only", "💬 Conversations", "🔀 Both"],
+                    horizontal=True,
+                    label_visibility="collapsed",
+                    index=2  # Default to "Both"
+                )
+            else:
+                search_scope = "📓 Vault Only"
 
         # Security: Validate query input
         if search_button and query:
@@ -174,19 +224,37 @@ def main():
                 with st.spinner("Searching knowledge base..."):
                     try:
                         if search_type == "Full Answer":
-                            result = st.session_state.rag.query(query)
+                            # Determine which query method to use
+                            if search_scope == "📓 Vault Only":
+                                result = st.session_state.rag.query(query)
+                            elif search_scope == "💬 Conversations":
+                                result = st.session_state.rag.query_conversations_only(query)
+                            else:  # Both
+                                result = st.session_state.rag.query_federated(query)
 
                             # Display answer
                             st.markdown("### 📝 Answer")
                             st.markdown(result['answer'])
 
-                            # Display sources
+                            # Show source summary for federated queries
+                            if search_scope == "🔀 Both" and 'source_summary' in result:
+                                summary = result.get('source_summary', {})
+                                if summary:
+                                    by_type = summary.get('by_type', {})
+                                    vault_count = by_type.get('vault', 0)
+                                    conv_count = by_type.get('conversations', 0)
+                                    st.info(f"📊 Sources: {vault_count} from vault, {conv_count} from conversations")
+
+                            # Display sources with type indicators
                             st.markdown("### 📚 Sources")
                             for source in result['sources'][:10]:
+                                source_type = source.get('source_type', 'vault')
+                                type_icon = "📓" if source_type == 'vault' else "💬"
                                 with st.expander(
-                                    f"**{source['rank']}. {source['title']}** (score: {source['score']:.3f})"
+                                    f"**{source['rank']}. {type_icon} {source['title']}** (score: {source['score']:.3f})"
                                 ):
                                     st.text(f"File: {source['file']}")
+                                    st.text(f"Type: {source_type.title()}")
                                     st.text(source['excerpt'])
 
                         else:
@@ -195,8 +263,10 @@ def main():
 
                             st.markdown("### 📚 Relevant Notes")
                             for note in notes:
+                                source_type = note.get('source_type', 'vault')
+                                type_icon = "📓" if source_type == 'vault' else "💬"
                                 with st.expander(
-                                    f"**{note['rank']}. {note['title']}** (score: {note['score']:.3f})"
+                                    f"**{note['rank']}. {type_icon} {note['title']}** (score: {note['score']:.3f})"
                                 ):
                                     st.text(f"File: {note['file']}")
                                     st.text(note['excerpt'])

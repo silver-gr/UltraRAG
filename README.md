@@ -131,7 +131,7 @@ LATE_CHUNKING_ALPHA=0.7  # 0.7 = 70% local, 30% global context
 - Trade-off: 2x slower indexing (requires embedding both document and chunks)
 - Recommended for: High-accuracy retrieval when indexing time is not critical
 
-See [LATE_CHUNKING_GUIDE.md](LATE_CHUNKING_GUIDE.md) for detailed documentation.
+See [docs/features/LATE_CHUNKING.md](docs/features/LATE_CHUNKING.md) for detailed documentation.
 
 ### Query Transformation Methods
 
@@ -308,6 +308,15 @@ This is a personal project implementing research from the compass_artifact docum
 ## License
 
 MIT License - See LICENSE file
+
+## Documentation
+
+Full documentation is available in the [`docs/`](docs/) folder:
+
+- [Quick Start Guide](docs/QUICKSTART.md)
+- [Architecture Overview](docs/ARCHITECTURE.md)
+- [Testing Guide](docs/TESTING.md)
+- **Feature Guides**: [Late Chunking](docs/features/LATE_CHUNKING.md) | [Query Transformation](docs/features/QUERY_TRANSFORMATION.md) | [Self-Correction](docs/features/SELF_CORRECTION.md) | [Graph Retrieval](docs/features/GRAPH_RETRIEVAL.md)
 
 ## Acknowledgments
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, SecretStr, field_validator
 
@@ -61,6 +61,9 @@ class VectorDBConfig(BaseModel):
     """Vector database configuration."""
     db_type: str = Field(default="lancedb")
     lancedb_path: Path = Field(default=Path("./data/lancedb"))
+    # Separate table for AI conversation index (federated retrieval)
+    conversations_table: str = Field(default="conversations")
+    vault_table: str = Field(default="vectors")  # Default table name for vault
     qdrant_host: str = Field(default="localhost")
     qdrant_port: int = Field(default=6333)
     qdrant_collection: str = Field(default="obsidian_notes")
@@ -142,6 +145,22 @@ class LLMConfig(BaseModel):
         return v
 
 
+class ConversationsConfig(BaseModel):
+    """AI Conversations index configuration."""
+    enabled: bool = Field(default=False)
+    path: Optional[Path] = Field(default=None)
+    weight: float = Field(default=0.8)  # Score weight vs vault (vault=1.0)
+    include_in_default_search: bool = Field(default=True)
+
+    @field_validator('weight')
+    @classmethod
+    def validate_weight(cls, v: float) -> float:
+        """Validate weight is between 0 and 2."""
+        if not 0 <= v <= 2:
+            raise ValueError(f"weight must be between 0 and 2, got {v}")
+        return v
+
+
 class RAGConfig(BaseModel):
     """Main RAG system configuration."""
     vault_path: Path
@@ -150,6 +169,7 @@ class RAGConfig(BaseModel):
     graph_db: GraphDBConfig = Field(default_factory=GraphDBConfig)
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    conversations: ConversationsConfig = Field(default_factory=ConversationsConfig)
 
     # Indexing options
     enable_checkpointing: bool = Field(default=True)
@@ -280,6 +300,12 @@ def load_config() -> RAGConfig:
             temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
             max_tokens=int(os.getenv("LLM_MAX_TOKENS", "8192")),
             backend=os.getenv("LLM_BACKEND", "api")  # "api" or "cli"
+        ),
+        conversations=ConversationsConfig(
+            enabled=os.getenv("CONVERSATIONS_ENABLED", "false").lower() == "true",
+            path=Path(os.getenv("CONVERSATIONS_PATH", "")) if os.getenv("CONVERSATIONS_PATH") else None,
+            weight=float(os.getenv("CONVERSATIONS_WEIGHT", "0.8")),
+            include_in_default_search=os.getenv("CONVERSATIONS_IN_DEFAULT_SEARCH", "true").lower() == "true"
         ),
         enable_checkpointing=os.getenv("ENABLE_CHECKPOINTING", "true").lower() == "true",
         voyage_api_key=SecretStr(os.getenv("VOYAGE_API_KEY", "")),
