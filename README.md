@@ -22,17 +22,17 @@ A sophisticated Retrieval-Augmented Generation (RAG) system specifically designe
 - ✅ **Wikilink Graph**: Builds knowledge graph from note connections
 - ✅ **AI Conversations RAG**: Federated search across your vault AND past AI conversations (ChatGPT, Claude, Gemini)
 
-### Phase 2: Advanced Features (Coming Soon)
-- 🔄 Graph-based retrieval with Neo4j
+### Phase 2: Production Features (Implemented)
+- ✅ **Streamlit Web Interface**: Full-featured web UI with federated search
+- ✅ **Query Caching**: LRU cache for faster repeated queries
+- ✅ **Incremental Indexing**: Checkpoint-based recovery for large vaults
+- ✅ **Wikilink Graph Retrieval**: Traverse note connections for related content
+
+### Phase 3: Advanced Features (Coming Soon)
+- 🔄 Neo4j graph database integration
 - 🔄 RAPTOR hierarchical summaries
 - 🔄 Temporal filtering (by creation/modification date)
-- 🔄 Adaptive query routing
-
-### Phase 3: Production Features (Coming Soon)
-- 🔄 Incremental indexing
-- 🔄 Query caching
 - 🔄 RAGAS evaluation framework
-- 🔄 Streamlit web interface
 
 ## Installation
 
@@ -293,26 +293,25 @@ Expected metrics on a 1,650-note vault:
 
 ## Roadmap
 
-### Phase 1: ✅ Core RAG (Weeks 1-4)
+### Phase 1: ✅ Core RAG
 - [x] Document loading and parsing
 - [x] Semantic chunking
 - [x] Vector indexing
 - [x] Basic retrieval
 - [x] LLM integration
 
-### Phase 2: 🔄 Advanced Features (Weeks 5-8)
-- [ ] Neo4j graph integration
+### Phase 2: ✅ Production Features
+- [x] Streamlit web interface
+- [x] Query caching
+- [x] Incremental indexing with checkpoints
+- [x] Wikilink graph retrieval
+- [x] AI conversations federated search
+
+### Phase 3: 🔄 Advanced Features
+- [ ] Neo4j graph database
 - [ ] RAPTOR hierarchical summaries
 - [ ] Temporal filtering
-- [ ] Adaptive query routing
-- [ ] Parent-child retrieval
-
-### Phase 3: 🔄 Production (Weeks 9-12)
-- [ ] Incremental indexing
-- [ ] Query caching
 - [ ] RAGAS evaluation
-- [ ] Streamlit UI
-- [ ] Monitoring dashboard
 
 ## Troubleshooting
 
