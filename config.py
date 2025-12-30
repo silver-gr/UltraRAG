@@ -98,6 +98,12 @@ class RetrievalConfig(BaseModel):
     use_self_correction: bool = Field(default=True)
     self_correction_max_retries: int = Field(default=2)
 
+    # Research mode settings (iterative retrieval)
+    enable_research_mode: bool = Field(default=True)
+    research_max_iterations: int = Field(default=3)
+    research_confidence_threshold: float = Field(default=0.8)
+    research_max_subqueries: int = Field(default=3)
+
     @field_validator('query_transform_method')
     @classmethod
     def validate_query_transform_method(cls, v: str) -> str:

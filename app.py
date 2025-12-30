@@ -188,7 +188,7 @@ def main():
             max_chars=10000  # Security: Limit query length
         )
 
-        col1, col2, col3 = st.columns([1, 2, 2])
+        col1, col2, col3, col4 = st.columns([1, 2, 2, 1])
         with col1:
             search_button = st.button("🔍 Search", type="primary", use_container_width=True)
         with col2:
@@ -210,6 +210,13 @@ def main():
                 )
             else:
                 search_scope = "📓 Vault Only"
+        with col4:
+            # Research mode toggle
+            research_mode = st.checkbox(
+                "🔬 Research",
+                help="Enable multi-step iterative retrieval (3-5x slower, higher accuracy)",
+                value=False
+            )
 
         # Security: Validate query input
         if search_button and query:
@@ -221,11 +228,17 @@ def main():
             else:
                 st.session_state.history.append(query)
 
-                with st.spinner("Searching knowledge base..."):
+                # Show research mode warning
+                spinner_message = "Researching knowledge base (this may take 30-60 seconds)..." if research_mode else "Searching knowledge base..."
+
+                with st.spinner(spinner_message):
                     try:
                         if search_type == "Full Answer":
                             # Determine which query method to use
-                            if search_scope == "📓 Vault Only":
+                            if research_mode:
+                                # Research mode always uses vault (most comprehensive mode)
+                                result = st.session_state.rag.query_research(query)
+                            elif search_scope == "📓 Vault Only":
                                 result = st.session_state.rag.query(query)
                             elif search_scope == "💬 Conversations":
                                 result = st.session_state.rag.query_conversations_only(query)
@@ -235,6 +248,11 @@ def main():
                             # Display answer
                             st.markdown("### 📝 Answer")
                             st.markdown(result['answer'])
+
+                            # Show research summary for research mode
+                            if research_mode and 'research_summary' in result:
+                                with st.expander("🔬 Research Details", expanded=False):
+                                    st.text(result['research_summary'])
 
                             # Show source summary for federated queries
                             if search_scope == "🔀 Both" and 'source_summary' in result:

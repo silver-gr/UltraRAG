@@ -1,0 +1,102 @@
+[
+  {
+    "question": "What are the key features of late chunking in RAG systems?",
+    "ground_truth": "Late chunking is a technique where embeddings are computed at the document level first, then chunks are derived from these contextualized embeddings. This preserves more semantic context compared to chunking before embedding. Key features include better semantic coherence, reduced information loss at chunk boundaries, and improved retrieval accuracy by maintaining document-level context.",
+    "expected_sources": ["RAG Architecture.md", "Chunking Strategies.md"],
+    "metadata": {
+      "category": "technical",
+      "difficulty": "medium",
+      "topic": "chunking"
+    }
+  },
+  {
+    "question": "How does hybrid search improve retrieval quality?",
+    "ground_truth": "Hybrid search combines semantic vector search with keyword-based BM25 retrieval. Vector search finds semantically similar content even with different wording, while BM25 excels at exact keyword matches. By combining both approaches, hybrid search captures both semantic meaning and precise terminology, leading to more comprehensive and accurate retrieval results.",
+    "expected_sources": ["Retrieval Methods.md", "Hybrid Search.md"],
+    "metadata": {
+      "category": "technical",
+      "difficulty": "medium",
+      "topic": "retrieval"
+    }
+  },
+  {
+    "question": "What is the purpose of query transformation in RAG pipelines?",
+    "ground_truth": "Query transformation techniques like HyDE (Hypothetical Document Embeddings) and multi-query expansion improve retrieval by reformulating the original query. HyDE generates a hypothetical answer and embeds it to find similar documents, while multi-query expansion creates multiple variations of the query to capture different aspects. These techniques help overcome vocabulary mismatches and improve recall by casting a wider search net.",
+    "expected_sources": ["Query Processing.md", "RAG Optimization.md"],
+    "metadata": {
+      "category": "technical",
+      "difficulty": "hard",
+      "topic": "query_processing"
+    }
+  },
+  {
+    "question": "Explain the difference between faithfulness and answer relevancy metrics.",
+    "ground_truth": "Faithfulness measures whether the generated answer is grounded in the retrieved context, checking for hallucinations or unsupported claims. Answer relevancy evaluates whether the answer actually addresses the user's question, regardless of factual accuracy. A high faithfulness score means no hallucination, while high answer relevancy means the response is on-topic. Both are needed: faithfulness ensures trustworthiness, relevancy ensures usefulness.",
+    "expected_sources": ["Evaluation Metrics.md", "RAG Quality.md"],
+    "metadata": {
+      "category": "evaluation",
+      "difficulty": "medium",
+      "topic": "metrics"
+    }
+  },
+  {
+    "question": "What are the advantages of using vector databases like LanceDB?",
+    "ground_truth": "LanceDB is an embedded vector database that offers several advantages: no separate server needed (embedded mode), efficient storage with columnar format, fast similarity search with ANN algorithms, built-in versioning, and native support for multimodal data. It's lightweight, easy to deploy, and provides good performance for local and cloud deployments. The embedded nature makes it ideal for applications where you want vector search without managing a separate database service.",
+    "expected_sources": ["Vector Databases.md", "LanceDB Guide.md"],
+    "metadata": {
+      "category": "infrastructure",
+      "difficulty": "easy",
+      "topic": "vector_db"
+    }
+  },
+  {
+    "question": "How does contextual retrieval enhance chunk quality?",
+    "ground_truth": "Contextual retrieval enhances chunks by prepending context about the document and chunk's position before embedding. This context includes document title, summary, and the chunk's role within the document. By including this contextual information, each chunk becomes more self-contained and semantically rich, improving retrieval accuracy. However, it requires LLM calls to generate context for each chunk, increasing indexing cost and time.",
+    "expected_sources": ["Contextual Retrieval.md", "Advanced Techniques.md"],
+    "metadata": {
+      "category": "technical",
+      "difficulty": "hard",
+      "topic": "retrieval"
+    }
+  },
+  {
+    "question": "What is the role of reranking in retrieval pipelines?",
+    "ground_truth": "Reranking is a second-stage retrieval process that refines the initial results. After vector search retrieves a large candidate set (e.g., top 75), a more sophisticated reranker model re-scores these candidates considering cross-attention between query and document. Rerankers like Voyage's rerank-2.5 are more accurate but slower than vector search, making the two-stage approach optimal: fast vector search for recall, accurate reranking for precision. This typically improves the final top-k results significantly.",
+    "expected_sources": ["Reranking.md", "Two-Stage Retrieval.md"],
+    "metadata": {
+      "category": "technical",
+      "difficulty": "medium",
+      "topic": "retrieval"
+    }
+  },
+  {
+    "question": "Why is self-correction important in RAG systems?",
+    "ground_truth": "Self-correction mechanisms like Self-RAG and CRAG enable the system to evaluate retrieval quality and retry when needed. The LLM judges whether retrieved documents are relevant to the query. If not relevant, the system can reformulate the query and retrieve again, or fall back to the LLM's parametric knowledge. This prevents generating answers from poor context and reduces hallucination. Self-correction adds latency but significantly improves answer quality and reliability.",
+    "expected_sources": ["Self-Correction.md", "RAG Reliability.md"],
+    "metadata": {
+      "category": "technical",
+      "difficulty": "hard",
+      "topic": "quality"
+    }
+  },
+  {
+    "question": "What are the trade-offs between different embedding models?",
+    "ground_truth": "Embedding models vary in size, speed, accuracy, and cost. Larger models like voyage-3-large offer better semantic understanding but are slower and more expensive. Smaller models like voyage-3.5-lite are faster and cheaper with acceptable accuracy. Multilingual models support more languages but may sacrifice performance in specific languages. Local models (like Qwen) avoid API costs and ensure privacy but require GPU resources. The choice depends on your requirements for accuracy, latency, cost, and deployment constraints.",
+    "expected_sources": ["Embedding Models.md", "Model Selection.md"],
+    "metadata": {
+      "category": "technical",
+      "difficulty": "medium",
+      "topic": "embeddings"
+    }
+  },
+  {
+    "question": "How do wikilinks in Obsidian vaults enhance RAG retrieval?",
+    "ground_truth": "Wikilinks create an explicit knowledge graph structure within Obsidian vaults. When a note is retrieved, the system can traverse these links to fetch related notes, enriching the context. This graph-based retrieval complements vector search: vectors find semantically similar content, while wikilinks provide curated human connections between concepts. The combination captures both implicit semantic relationships and explicit knowledge structure, improving context completeness for complex queries.",
+    "expected_sources": ["Obsidian Integration.md", "Graph Retrieval.md"],
+    "metadata": {
+      "category": "integration",
+      "difficulty": "medium",
+      "topic": "obsidian"
+    }
+  }
+]
