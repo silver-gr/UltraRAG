@@ -1,12 +1,56 @@
 """Simple web interface for UltraRAG using Streamlit."""
 import os
+import re
+import time
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import streamlit as st
 from pathlib import Path
+from datetime import datetime
 from main import UltraRAG
 from config import load_config
 from vector_store import index_exists
+from temporal_filter import get_all_presets, DateFilterPreset
+
+
+def clean_excerpt_for_display(text: str, max_chars: int = 500) -> str:
+    """Clean and truncate excerpt for display.
+
+    - Removes markdown headings (# ## ###)
+    - Truncates at word boundary
+    - Preserves other markdown formatting (bold, italic, lists)
+    """
+    # Remove markdown headings (lines starting with #)
+    text = re.sub(r'^#{1,6}\s+.*$', '', text, flags=re.MULTILINE)
+
+    # Clean up multiple newlines
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = text.strip()
+
+    # Truncate at word boundary if too long
+    if len(text) > max_chars:
+        # Find the last space before max_chars
+        truncate_at = text.rfind(' ', 0, max_chars)
+        if truncate_at == -1:
+            truncate_at = max_chars
+        text = text[:truncate_at] + "..."
+
+    return text
+
+
+def linkify_citations(text: str) -> str:
+    """Convert [1], [2], etc. citations to clickable anchor links.
+
+    Converts patterns like [1], [12], [1][2][3] to HTML links that scroll
+    to the corresponding source section.
+    """
+    # Pattern matches [N] where N is one or more digits
+    def replace_citation(match):
+        num = match.group(1)
+        return f'<a href="#source-{num}" style="color: #1e90ff; text-decoration: none;">[{num}]</a>'
+
+    return re.sub(r'\[(\d+)\]', replace_citation, text)
+
 
 # Page config
 st.set_page_config(
@@ -24,6 +68,8 @@ if 'history' not in st.session_state:
     st.session_state.history = []
 if 'conversations_indexed' not in st.session_state:
     st.session_state.conversations_indexed = False
+if 'date_filter' not in st.session_state:
+    st.session_state.date_filter = "all_time"
 
 
 def main():
@@ -125,6 +171,36 @@ def main():
             else:
                 st.info("Set CONVERSATIONS_PATH in .env")
 
+        # RAPTOR section
+        if st.session_state.rag and st.session_state.indexed:
+            st.divider()
+            st.subheader("🌳 RAPTOR Summaries")
+
+            config = st.session_state.rag.config
+            has_raptor = st.session_state.rag.raptor_index_exists()
+
+            if has_raptor:
+                st.success("🟢 RAPTOR index ready")
+                stats = st.session_state.rag.get_raptor_stats()
+                st.caption(f"Mode: {stats.get('default_mode', 'collapsed')} | Nodes: {stats.get('node_count', 'unknown')}")
+
+                # Load if not already
+                if st.session_state.rag.raptor_manager is None:
+                    st.session_state.rag.load_raptor_index()
+
+            elif config.raptor.enabled:
+                st.info("RAPTOR enabled but not indexed")
+                if st.button("🌳 Build RAPTOR Index"):
+                    with st.spinner("Building RAPTOR hierarchical summaries (this may take several minutes)..."):
+                        try:
+                            st.session_state.rag.index_raptor(force_reindex=False, interactive=False)
+                            st.success("✅ RAPTOR index built!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Error: {e}")
+            else:
+                st.info("Set ENABLE_RAPTOR=true in .env")
+
         # System status
         st.divider()
         st.subheader("📊 System Status")
@@ -144,6 +220,36 @@ def main():
                 st.warning("🟡 Not indexed yet")
         else:
             st.info("System not initialized")
+
+        # Date filter section (only show when indexed)
+        if st.session_state.indexed:
+            st.divider()
+            st.subheader("📅 Date Filter")
+
+            # Get preset options
+            preset_options = get_all_presets()
+            preset_labels = [label for label, _ in preset_options]
+            preset_values = [value for _, value in preset_options]
+
+            # Find current index
+            current_idx = 0
+            if st.session_state.date_filter in preset_values:
+                current_idx = preset_values.index(st.session_state.date_filter)
+
+            selected_label = st.selectbox(
+                "Filter by date:",
+                options=preset_labels,
+                index=current_idx,
+                help="Filter search results to documents created/modified within the selected time period"
+            )
+
+            # Update session state with selected preset
+            selected_idx = preset_labels.index(selected_label)
+            st.session_state.date_filter = preset_values[selected_idx]
+
+            # Show active filter info
+            if st.session_state.date_filter != "all_time":
+                st.info(f"🕐 Showing: {selected_label}")
         
         # Query history
         if st.session_state.history:
@@ -188,7 +294,7 @@ def main():
             max_chars=10000  # Security: Limit query length
         )
 
-        col1, col2, col3, col4 = st.columns([1, 2, 2, 1])
+        col1, col2, col3, col4, col5, col6 = st.columns([1, 2, 2, 1, 1, 1])
         with col1:
             search_button = st.button("🔍 Search", type="primary", use_container_width=True)
         with col2:
@@ -217,6 +323,26 @@ def main():
                 help="Enable multi-step iterative retrieval (3-5x slower, higher accuracy)",
                 value=False
             )
+        with col5:
+            # RAPTOR mode toggle (only show if RAPTOR index exists)
+            has_raptor = st.session_state.rag.raptor_index_exists() if st.session_state.rag else False
+            if has_raptor:
+                raptor_mode = st.checkbox(
+                    "🌳 RAPTOR",
+                    help="Use hierarchical summaries for better multi-document reasoning",
+                    value=False
+                )
+            else:
+                raptor_mode = False
+        with col6:
+            # Max sources dropdown
+            max_sources_options = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 125, 150, 175, 200]
+            max_sources = st.selectbox(
+                "Max sources",
+                options=max_sources_options,
+                index=0,  # Default to 10
+                help="Maximum number of sources to use for synthesis"
+            )
 
         # Security: Validate query input
         if search_button and query:
@@ -228,26 +354,52 @@ def main():
             else:
                 st.session_state.history.append(query)
 
-                # Show research mode warning
-                spinner_message = "Researching knowledge base (this may take 30-60 seconds)..." if research_mode else "Searching knowledge base..."
+                # Show appropriate spinner message
+                if raptor_mode:
+                    spinner_message = "Searching RAPTOR hierarchical summaries..."
+                elif research_mode:
+                    spinner_message = "Researching knowledge base (this may take 30-60 seconds)..."
+                else:
+                    spinner_message = "Searching knowledge base..."
+
+                start_time = time.time()
 
                 with st.spinner(spinner_message):
                     try:
+                        # Get current date filter from session state
+                        date_filter = st.session_state.date_filter
+
                         if search_type == "Full Answer":
                             # Determine which query method to use
-                            if research_mode:
+                            if raptor_mode:
+                                # RAPTOR mode uses hierarchical summaries
+                                result = st.session_state.rag.query_raptor(query, max_sources=max_sources)
+                            elif research_mode:
                                 # Research mode always uses vault (most comprehensive mode)
-                                result = st.session_state.rag.query_research(query)
+                                result = st.session_state.rag.query_research(query, max_sources=max_sources, date_filter=date_filter)
                             elif search_scope == "📓 Vault Only":
-                                result = st.session_state.rag.query(query)
+                                result = st.session_state.rag.query(query, max_sources=max_sources, date_filter=date_filter)
                             elif search_scope == "💬 Conversations":
-                                result = st.session_state.rag.query_conversations_only(query)
+                                result = st.session_state.rag.query_conversations_only(query, max_sources=max_sources, date_filter=date_filter)
                             else:  # Both
-                                result = st.session_state.rag.query_federated(query)
+                                result = st.session_state.rag.query_federated(query, max_sources=max_sources, date_filter=date_filter)
 
-                            # Display answer
+                            # Calculate execution time and stats
+                            exec_time = time.time() - start_time
+                            total_sources = result.get('total_sources', len(result['sources']))
+                            displayed_sources = min(max_sources, total_sources)
+                            word_count = len(result['answer'].split())
+
+                            # Display execution summary
+                            st.markdown(
+                                f"**Retrieved {total_sources} notes** and used **{displayed_sources} sources** "
+                                f"for **{word_count:,} words** in **{exec_time:.1f} seconds**"
+                            )
+
+                            # Display answer with clickable citation links
                             st.markdown("### 📝 Answer")
-                            st.markdown(result['answer'])
+                            answer_with_links = linkify_citations(result['answer'])
+                            st.markdown(answer_with_links, unsafe_allow_html=True)
 
                             # Show research summary for research mode
                             if research_mode and 'research_summary' in result:
@@ -263,31 +415,36 @@ def main():
                                     conv_count = by_type.get('conversations', 0)
                                     st.info(f"📊 Sources: {vault_count} from vault, {conv_count} from conversations")
 
-                            # Display sources with type indicators
-                            st.markdown("### 📚 Sources")
-                            for source in result['sources'][:10]:
+                            # Display sources with type indicators (use max_sources setting)
+                            total_sources = result.get('total_sources', len(result['sources']))
+                            st.markdown(f"### 📚 Sources ({min(max_sources, total_sources)} of {total_sources})")
+                            for source in result['sources'][:max_sources]:
                                 source_type = source.get('source_type', 'vault')
                                 type_icon = "📓" if source_type == 'vault' else "💬"
+                                # Add anchor ID for citation linking
+                                st.markdown(f'<div id="source-{source["rank"]}"></div>', unsafe_allow_html=True)
                                 with st.expander(
                                     f"**{source['rank']}. {type_icon} {source['title']}** (score: {source['score']:.3f})"
                                 ):
-                                    st.text(f"File: {source['file']}")
-                                    st.text(f"Type: {source_type.title()}")
-                                    st.text(source['excerpt'])
+                                    st.caption(f"📁 {source['file']} • {source_type.title()}")
+                                    # Render markdown with cleaned excerpt
+                                    cleaned = clean_excerpt_for_display(source['excerpt'])
+                                    st.markdown(cleaned)
 
                         else:
                             # Just retrieve relevant notes
-                            notes = st.session_state.rag.search_notes(query, top_k=20)
+                            notes = st.session_state.rag.search_notes(query, top_k=max_sources, date_filter=date_filter)
 
-                            st.markdown("### 📚 Relevant Notes")
+                            st.markdown(f"### 📚 Relevant Notes ({len(notes)} found)")
                             for note in notes:
                                 source_type = note.get('source_type', 'vault')
                                 type_icon = "📓" if source_type == 'vault' else "💬"
                                 with st.expander(
                                     f"**{note['rank']}. {type_icon} {note['title']}** (score: {note['score']:.3f})"
                                 ):
-                                    st.text(f"File: {note['file']}")
-                                    st.text(note['excerpt'])
+                                    st.caption(f"📁 {note['file']} • {source_type.title()}")
+                                    cleaned = clean_excerpt_for_display(note['excerpt'])
+                                    st.markdown(cleaned)
 
                     except Exception as e:
                         st.error(f"❌ Error: {e}")

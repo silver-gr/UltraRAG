@@ -198,7 +198,7 @@ rag.query_transformer.transform_query(
 | Multi-Query (3) | 1 | 200-500ms | Exploratory search |
 | Both (3 queries) | 4 | 800-2000ms | Critical queries |
 
-### Cost Impact (Gemini 2.0 Flash)
+### Cost Impact (Gemini 3 Flash)
 
 Assuming ~500 tokens per generation:
 

@@ -107,7 +107,30 @@
    ┌─────────────────────────┐
    │  Query Processing       │
    │  - Clean & normalize    │
-   │  - Optional expansion   │
+   │  - HyDE/Multi-Query     │
+   │  - Research Mode check  │
+   └───────┬─────────────────┘
+           │
+           ├───► If @research prefix or 🔬 enabled:
+           │     │
+           │     ▼
+           │     ┌─────────────────────────┐
+           │     │  Research Mode          │
+           │     │  (research_mode.py)     │
+           │     │  - Iterative retrieval  │
+           │     │  - LLM gap analysis     │
+           │     │  - Sub-query generation │
+           │     │  - Up to 3 iterations   │
+           │     └───────┬─────────────────┘
+           │             │
+           └─────────────┤
+                         ▼
+   ┌─────────────────────────┐
+   │  Self-Correction        │
+   │  (self_correction.py)   │
+   │  - Grade: CORRECT/      │
+   │    AMBIGUOUS/INCORRECT  │
+   │  - Refine & re-retrieve │
    └───────┬─────────────────┘
            │
            ▼
@@ -177,11 +200,11 @@
            │
            ▼
    ┌─────────────────────────┐
-   │  Gemini 2.0 Flash       │
+   │  Gemini 3 Flash         │
    │  - 1M context window    │
    │  - Thinking mode        │
    │  - Temp: 0.1            │
-   │  - Max tokens: 8192     │
+   │  - Max tokens: 65536    │
    └───────┬─────────────────┘
            │
            ▼
@@ -276,22 +299,38 @@ config.py ──────► Provides configuration to all components
 
 
 ═══════════════════════════════════════════════════════════════════
-                        EXTENSIBILITY POINTS
+                        ADVANCED FEATURES (IMPLEMENTED)
 ═══════════════════════════════════════════════════════════════════
 
-Phase 2 Ready:
+Phase 3 Features:
    │
-   ├─► Graph Database (Neo4j)
-   │   └─► Add wikilink traversal to retrieval
+   ├─► Research Mode (research_mode.py)
+   │   └─► Iterative multi-step retrieval with LLM gap analysis
+   │   └─► Confidence scoring and automatic sub-query generation
+   │   └─► Based on Khoj research mode (141% accuracy improvement)
+   │
+   ├─► Self-Correction (self_correction.py)
+   │   └─► Self-RAG: Relevance grading (CORRECT/AMBIGUOUS/INCORRECT)
+   │   └─► CRAG: Query refinement and re-retrieval
+   │   └─► Up to max_retries attempts with refined queries
+   │
+   ├─► RAGAS Evaluation (evaluation/)
+   │   └─► Faithfulness, answer relevancy metrics
+   │   └─► Context precision and recall
+   │   └─► Automated evaluation against test datasets
+   │
+   ├─► Inline Citations
+   │   └─► [1], [2], [3] style citations in responses
+   │   └─► Clickable links that scroll to sources (web UI)
    │
    ├─► RAPTOR Summaries
-   │   └─► Add hierarchical clustering to indexing
+   │   └─► Hierarchical document summaries
    │
    ├─► Temporal Filtering
-   │   └─► Add date-based filtering to query engine
+   │   └─► Filter by creation/modification date
    │
-   └─► Adaptive Router
-       └─► Add query classification before retrieval
+   └─► Future: Neo4j Graph Database
+       └─► Deferred - in-memory graph sufficient for most vaults
 
 
 ═══════════════════════════════════════════════════════════════════

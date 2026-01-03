@@ -33,7 +33,7 @@ except ImportError:
     BM25_AVAILABLE = False
 
 
-# Enhanced prompt template for federated retrieval
+# Enhanced prompt template for federated retrieval with inline citations
 FEDERATED_TEMPLATE = """You are a personal knowledge assistant with access to both personal notes and AI conversation history.
 
 Context from personal knowledge base:
@@ -48,11 +48,12 @@ Instructions:
 - PREMISE: What does the user already know based on their vault and past conversations?
 - TASK: What specific question or need does the user have?
 - CONSTRAINTS: Only use information from the provided context. If uncertain, acknowledge limitations.
-- FORMAT: Provide clear, well-structured answers. Cite sources when relevant (note titles or conversation dates).
+- FORMAT: Provide clear, well-structured answers. Use inline citations [1], [2], etc. to reference specific sources.
+- CITATIONS: When using information from a source, add the source number in brackets immediately after the statement, e.g., "Habits form through repetition [3]."
 
 Query: {query_str}
 
-Think through the relevant concepts, then provide a comprehensive answer:
+Think through the relevant concepts, then provide a comprehensive answer with inline citations:
 """
 
 
@@ -97,7 +98,8 @@ class FederatedRetriever(BaseRetriever):
         self.query_transformer = query_transformer
         self.reranker = reranker
         self.top_k_per_source = top_k_per_source or config.retrieval.top_k
-        self.final_top_k = final_top_k or config.retrieval.top_k
+        # Use rerank_top_n for final limit (now 100+) to allow more sources
+        self.final_top_k = final_top_k or config.retrieval.rerank_top_n
         self.parallel = parallel
 
         # Build retrievers for each source

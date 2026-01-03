@@ -5,6 +5,7 @@ Based on Khoj's research mode (141% accuracy improvement on benchmarks).
 """
 
 import logging
+import re
 from typing import List, Optional, Set, Dict, Any
 from dataclasses import dataclass
 from llama_index.core.schema import NodeWithScore, QueryBundle
@@ -57,7 +58,7 @@ class ResearchResult:
                 f"(confidence: {iter_result.confidence_score:.2f})"
             )
             if iter_result.gaps_identified:
-                lines.append(f"    Gaps: {iter_result.gaps_identified[:100]}...")
+                lines.append(f"    Gaps: {iter_result.gaps_identified}")
 
         return "\n".join(lines)
 
@@ -272,12 +273,13 @@ class ResearchRetriever:
             logger.debug("No nodes to analyze, returning low confidence")
             return "No relevant information found", 0.0
 
-        # Build context from top nodes (limit to save tokens)
+        # Build context from top nodes - use FULL content for quality gap analysis
+        # Modern LLMs have massive context (Gemini: 1M tokens), no reason to truncate
         context_chunks = []
-        for idx, node in enumerate(nodes[:5], 1):
-            chunk_text = node.node.text[:400]  # Truncate for token efficiency
+        for idx, node in enumerate(nodes[:10], 1):  # Analyze top 10 nodes, not just 5
             title = node.metadata.get('title', 'Unknown')
-            context_chunks.append(f"[Source {idx}: {title}]\n{chunk_text}")
+            file_path = node.metadata.get('file_path', '')
+            context_chunks.append(f"[Source {idx}: {title}]\nPath: {file_path}\n{node.node.text}")
 
         context = "\n\n".join(context_chunks)
 
@@ -285,44 +287,69 @@ class ResearchRetriever:
 
 Query: {query}
 
-Retrieved Information:
+Retrieved Information (top 10 chunks from knowledge base):
 {context}
 
 Evaluate:
-1. Does this information fully answer the query?
-2. What key aspects or details are missing (if any)?
-3. What is your confidence that the query can be fully answered with this information?
+1. Does this information comprehensively answer the query?
+2. What specific topics, details, or perspectives are missing?
+3. Rate your confidence (0.0-1.0) that we have sufficient information to answer well.
 
 Respond in this exact format:
 CONFIDENCE: <number between 0.0 and 1.0>
-GAPS: <brief description of missing information, or "None" if complete>
+GAPS: <specific missing topics, or "None" if comprehensive>
 
-Example:
-CONFIDENCE: 0.6
-GAPS: Missing information about implementation details and code examples"""
+Guidelines:
+- 0.9+ = Query fully answered with rich detail
+- 0.7-0.9 = Core question answered, some details missing
+- 0.5-0.7 = Partial answer, significant gaps
+- <0.5 = Insufficient or irrelevant information"""
 
         try:
             result = self.llm.complete(prompt).text.strip()
-            logger.debug(f"Gap analysis result: {result[:200]}...")
+            logger.info(f"Gap analysis LLM response: {result[:300]}...")
 
-            # Parse confidence score
+            # Parse confidence score with robust regex matching
             confidence = 0.5  # Default
             gaps = None
 
-            for line in result.split('\n'):
-                line = line.strip()
-                if line.startswith('CONFIDENCE:'):
-                    try:
-                        confidence_str = line.split(':', 1)[1].strip()
-                        confidence = float(confidence_str)
-                        confidence = max(0.0, min(1.0, confidence))  # Clamp to [0, 1]
-                    except (ValueError, IndexError) as e:
-                        logger.warning(f"Failed to parse confidence: {e}")
+            # Try to find confidence value with flexible patterns
+            # Handles: "CONFIDENCE: 0.6", "**CONFIDENCE:** 0.6", "Confidence: 0.6", etc.
+            confidence_patterns = [
+                r'\*?\*?CONFIDENCE\*?\*?\s*[:：]\s*([\d.]+)',  # **CONFIDENCE:** 0.6
+                r'confidence\s*[:：]\s*([\d.]+)',  # confidence: 0.6
+                r'Confidence\s*[:：]\s*([\d.]+)',  # Confidence: 0.6
+            ]
 
-                elif line.startswith('GAPS:'):
-                    gaps_str = line.split(':', 1)[1].strip()
-                    if gaps_str.lower() not in ['none', 'no gaps', 'n/a']:
-                        gaps = gaps_str
+            for pattern in confidence_patterns:
+                match = re.search(pattern, result, re.IGNORECASE)
+                if match:
+                    try:
+                        confidence = float(match.group(1))
+                        confidence = max(0.0, min(1.0, confidence))  # Clamp to [0, 1]
+                        logger.info(f"Parsed confidence: {confidence}")
+                        break
+                    except ValueError:
+                        continue
+
+            # Parse gaps with flexible matching
+            gaps_patterns = [
+                r'\*?\*?GAPS\*?\*?\s*[:：]\s*(.+?)(?:\n|$)',
+                r'gaps\s*[:：]\s*(.+?)(?:\n|$)',
+                r'Gaps\s*[:：]\s*(.+?)(?:\n|$)',
+            ]
+
+            for pattern in gaps_patterns:
+                match = re.search(pattern, result, re.IGNORECASE | re.DOTALL)
+                if match:
+                    gaps_str = match.group(1).strip()
+                    if gaps_str.lower() not in ['none', 'no gaps', 'n/a', 'none.', 'no gaps.']:
+                        gaps = gaps_str[:500]  # Limit length
+                        logger.info(f"Parsed gaps: {gaps[:100]}...")
+                    break
+
+            if confidence == 0.5:
+                logger.warning(f"Could not parse confidence from response, using default 0.5")
 
             return gaps, confidence
 

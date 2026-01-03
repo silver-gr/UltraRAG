@@ -27,6 +27,8 @@ from cache import EmbeddingCache
 from token_tracker import get_tracker
 from conversation_loader import ConversationLoader, ConversationChunker
 from federated_query import FederatedQueryEngine, IndexSource
+from temporal_filter import create_temporal_filter, DateFilterPreset
+from raptor_index import RaptorIndexManager, RaptorMode
 
 # Configure logging
 logging.basicConfig(
@@ -79,6 +81,11 @@ class UltraRAG:
             self.conversations_nodes = None
             self.conversations_vector_store = None
             self.federated_engine = None
+
+            # RAPTOR index (hierarchical summaries)
+            self.raptor_manager = None
+            if self.config.raptor.enabled:
+                self._setup_raptor()
 
             logger.info("UltraRAG system initialized successfully")
 
@@ -552,24 +559,44 @@ class UltraRAG:
                 query_transformer=self.query_transformer  # Pass query transformer
             )
     
-    def query(self, query_str: str, return_sources: bool = True):
-        """Query the RAG system."""
+    def query(self, query_str: str, return_sources: bool = True, max_sources: int = None, date_filter: DateFilterPreset = "all_time"):
+        """Query the RAG system.
+
+        Args:
+            query_str: Query string
+            return_sources: Whether to return source nodes
+            max_sources: Maximum sources to include (None = all retrieved)
+            date_filter: Date filter preset to apply ("all_time", "last_7_days", etc.)
+        """
         if self.query_engine is None:
             logger.error("Query attempted before system initialization")
             raise ValueError("System not initialized. Run index_vault() or load_existing_index() first.")
 
         logger.info(f"Processing query: {query_str[:100]}...")
+        if date_filter != "all_time":
+            logger.info(f"Date filter active: {date_filter}")
         print(f"\n🔍 Query: {query_str}")
         print("Searching knowledge base...\n")
 
         try:
             response = self.query_engine.query(query_str)
-            logger.info(f"Query successful, {len(response.source_nodes)} sources found")
+
+            # Apply temporal filter if specified
+            source_nodes = response.source_nodes
+            if date_filter != "all_time":
+                temporal_filter = create_temporal_filter(preset=date_filter)
+                if temporal_filter:
+                    source_nodes = temporal_filter._postprocess_nodes(source_nodes)
+
+            total_sources = len(source_nodes)
+            logger.info(f"Query successful, {total_sources} sources found")
 
             if return_sources:
+                sources = self._format_sources(source_nodes, max_sources)
                 return {
                     'answer': str(response),
-                    'sources': self._format_sources(response.source_nodes),
+                    'sources': sources,
+                    'total_sources': total_sources,
                     'raw_response': response
                 }
 
@@ -579,24 +606,37 @@ class UltraRAG:
             logger.error(f"Query failed: {e}", exc_info=True)
             # Re-raise the exception with context
             raise RuntimeError(f"Query execution failed: {e}") from e
-    
-    def _format_sources(self, source_nodes):
-        """Format source nodes for display."""
+
+    def _format_sources(self, source_nodes, max_sources: int = None):
+        """Format source nodes for display.
+
+        Args:
+            source_nodes: List of source nodes
+            max_sources: Maximum sources to include (None = all)
+        """
         sources = []
-        for idx, node in enumerate(source_nodes, 1):
+        nodes_to_format = source_nodes if max_sources is None else source_nodes[:max_sources]
+
+        for idx, node in enumerate(nodes_to_format, 1):
             sources.append({
                 'rank': idx,
                 'title': node.metadata.get('title', 'Unknown'),
                 'file': node.metadata.get('file_name', 'Unknown'),
                 'score': node.score,
-                'excerpt': node.text[:200] + "...",
+                'excerpt': node.text[:300] + "..." if len(node.text) > 300 else node.text,
                 'source_type': node.metadata.get('source_type', 'vault'),
                 'retrieval_source': node.metadata.get('retrieval_source', 'vault')
             })
         return sources
     
-    def search_notes(self, query_str: str, top_k: int = 10):
-        """Search for relevant notes without generation."""
+    def search_notes(self, query_str: str, top_k: int = 10, date_filter: DateFilterPreset = "all_time"):
+        """Search for relevant notes without generation.
+
+        Args:
+            query_str: Query string
+            top_k: Maximum number of results
+            date_filter: Date filter preset to apply
+        """
         if self.index is None:
             raise ValueError("Index not created. Run index_vault() first.")
 
@@ -607,6 +647,13 @@ class UltraRAG:
         )
 
         nodes = engine.get_relevant_nodes(query_str, top_k=top_k)
+
+        # Apply temporal filter if specified
+        if date_filter != "all_time":
+            temporal_filter = create_temporal_filter(preset=date_filter)
+            if temporal_filter:
+                nodes = temporal_filter._postprocess_nodes(nodes)
+
         return self._format_sources(nodes)
 
     def _setup_conversations_vector_store(self, mode: str = "create"):
@@ -865,7 +912,9 @@ class UltraRAG:
         self,
         query_str: str,
         source_filter: Optional[List[str]] = None,
-        return_sources: bool = True
+        return_sources: bool = True,
+        max_sources: int = None,
+        date_filter: DateFilterPreset = "all_time"
     ):
         """Query both vault and conversations with federated retrieval.
 
@@ -873,6 +922,8 @@ class UltraRAG:
             query_str: Query string
             source_filter: Optional list of sources ("vault", "conversations")
             return_sources: Include source information in response
+            max_sources: Maximum sources to include (None = all retrieved)
+            date_filter: Date filter preset to apply
         """
         if self.federated_engine is None:
             # Fallback to regular query if no federated engine
@@ -881,7 +932,10 @@ class UltraRAG:
 
             if self.federated_engine is None:
                 logger.warning("Federated engine not available, using standard query")
-                return self.query(query_str, return_sources=return_sources)
+                return self.query(query_str, return_sources=return_sources, max_sources=max_sources, date_filter=date_filter)
+
+        if date_filter != "all_time":
+            logger.info(f"Federated query with date filter: {date_filter}")
 
         print(f"\n🔍 Federated Query: {query_str}")
         print("Searching vault and conversations...\n")
@@ -892,13 +946,23 @@ class UltraRAG:
                 source_filter=source_filter
             )
 
+            # Apply temporal filter if specified
+            source_nodes = response.source_nodes
+            if date_filter != "all_time":
+                temporal_filter = create_temporal_filter(preset=date_filter)
+                if temporal_filter:
+                    source_nodes = temporal_filter._postprocess_nodes(source_nodes)
+
+            total_sources = len(source_nodes)
+
             if return_sources:
                 # Include source summary
                 source_summary = response.metadata.get('source_summary', {}) if hasattr(response, 'metadata') else {}
 
                 return {
                     'answer': str(response),
-                    'sources': self._format_sources(response.source_nodes),
+                    'sources': self._format_sources(source_nodes, max_sources),
+                    'total_sources': total_sources,
                     'source_summary': source_summary,
                     'raw_response': response
                 }
@@ -909,23 +973,27 @@ class UltraRAG:
             logger.error(f"Federated query failed: {e}", exc_info=True)
             raise RuntimeError(f"Federated query failed: {e}") from e
 
-    def query_vault_only(self, query_str: str, return_sources: bool = True):
+    def query_vault_only(self, query_str: str, return_sources: bool = True, max_sources: int = None, date_filter: DateFilterPreset = "all_time"):
         """Query only the vault index (exclude conversations)."""
         return self.query_federated(
             query_str,
             source_filter=["vault"],
-            return_sources=return_sources
+            return_sources=return_sources,
+            max_sources=max_sources,
+            date_filter=date_filter
         )
 
-    def query_conversations_only(self, query_str: str, return_sources: bool = True):
+    def query_conversations_only(self, query_str: str, return_sources: bool = True, max_sources: int = None, date_filter: DateFilterPreset = "all_time"):
         """Query only the conversations index."""
         return self.query_federated(
             query_str,
             source_filter=["conversations"],
-            return_sources=return_sources
+            return_sources=return_sources,
+            max_sources=max_sources,
+            date_filter=date_filter
         )
 
-    def query_research(self, query_str: str, return_sources: bool = True):
+    def query_research(self, query_str: str, return_sources: bool = True, max_sources: int = None, date_filter: DateFilterPreset = "all_time"):
         """Execute multi-step research mode for complex queries.
 
         Research mode performs iterative retrieval with gap analysis and query refinement.
@@ -934,6 +1002,8 @@ class UltraRAG:
         Args:
             query_str: User query
             return_sources: Whether to return source nodes (default: True)
+            max_sources: Maximum sources to include in response (None = all)
+            date_filter: Date filter preset to apply
 
         Returns:
             Dictionary with answer, sources, and research summary
@@ -942,23 +1012,32 @@ class UltraRAG:
             raise RuntimeError("Query engine not initialized. Please run index_vault() or load_existing_index() first.")
 
         logger.info(f"Research mode query: {query_str[:100]}...")
+        if date_filter != "all_time":
+            logger.info(f"Research mode with date filter: {date_filter}")
 
         try:
             # Import research module
             from research_mode import ResearchRetriever
+            from llama_index.core.retrievers import VectorIndexRetriever
 
-            # Get the base retriever from query engine
-            # For HybridQueryEngine, use the hybrid retriever
-            # For RAGQueryEngine, use the vector retriever
-            if hasattr(self.query_engine, 'query_engine'):
-                base_retriever = self.query_engine.query_engine._retriever
-            else:
-                # Fallback: create a simple vector retriever
-                from llama_index.core.retrievers import VectorIndexRetriever
-                base_retriever = VectorIndexRetriever(
-                    index=self.index,
-                    similarity_top_k=self.config.retrieval.top_k
+            # Create a FRESH retriever without self-correction wrapper
+            # Research mode has its own iterative refinement, so stacking with
+            # self-correction causes exponential slowdown (3 iterations × 3 retries = 9x)
+            base_retriever = VectorIndexRetriever(
+                index=self.index,
+                similarity_top_k=self.config.retrieval.top_k
+            )
+
+            # Add query transformation if enabled (but NOT self-correction)
+            if self.query_transformer and self.config.retrieval.query_transform_method not in ["none", "disabled"]:
+                from query_engine import QueryTransformRetriever
+                base_retriever = QueryTransformRetriever(
+                    base_retriever=base_retriever,
+                    query_transformer=self.query_transformer,
+                    transform_method=self.config.retrieval.query_transform_method,
+                    num_queries=self.config.retrieval.query_transform_num_queries
                 )
+                logger.info("Research mode: Using query transformation without self-correction")
 
             # Create research retriever
             research_retriever = ResearchRetriever(
@@ -979,40 +1058,66 @@ class UltraRAG:
                 f"confidence={research_result.final_confidence:.2f}"
             )
 
-            # Generate final answer using retrieved context
-            from llama_index.core.response_synthesizers import get_response_synthesizer
-            from llama_index.core.prompts import PromptTemplate
-            from query_engine import PTCF_TEMPLATE
+            # Generate final answer using retrieved context with research template
+            from llama_index.core import Settings
+            from query_engine import RESEARCH_TEMPLATE
 
-            response_synthesizer = get_response_synthesizer(
-                response_mode="compact",
-                text_qa_template=PromptTemplate(PTCF_TEMPLATE),
-                use_async=False
-            )
+            # Apply temporal filter if specified
+            all_retrieved = research_result.final_nodes
+            if date_filter != "all_time":
+                temporal_filter = create_temporal_filter(preset=date_filter)
+                if temporal_filter:
+                    all_retrieved = temporal_filter._postprocess_nodes(all_retrieved)
 
-            # Synthesize response from research results
-            response = response_synthesizer.synthesize(
-                query=query_str,
-                nodes=research_result.final_nodes
-            )
+            # Apply max_sources limit to nodes used for synthesis (so citations match displayed sources)
+            total_retrieved = len(all_retrieved)
+            nodes_for_synthesis = all_retrieved if max_sources is None else all_retrieved[:max_sources]
+            num_sources = len(nodes_for_synthesis)
 
-            # Format result
+            logger.info(f"Research synthesis: using {num_sources} of {total_retrieved} nodes for output")
+
+            # Build numbered context manually for proper [1], [2], [3] citations
+            context_parts = []
+            for i, node in enumerate(nodes_for_synthesis, 1):
+                title = node.metadata.get('title', 'Unknown')
+                file_path = node.metadata.get('file_path', '')
+                source_type = node.metadata.get('source_type', 'vault')
+                context_parts.append(
+                    f"[{i}] Source: {title}\n"
+                    f"File: {file_path} ({source_type})\n"
+                    f"Content:\n{node.node.text}\n"
+                )
+            numbered_context = "\n---\n".join(context_parts)
+
+            # Format template with source count and numbered context
+            research_prompt = RESEARCH_TEMPLATE.replace("{num_sources}", str(num_sources))
+            research_prompt = research_prompt.replace("{context_str}", numbered_context)
+            research_prompt = research_prompt.replace("{query_str}", query_str)
+
+            # Use LLM directly for better control over context
+            response = Settings.llm.complete(research_prompt)
+
+            # Format result (complete() returns CompletionResponse with .text attribute)
             result = {
-                'answer': response.response,
+                'answer': response.text,
                 'research_summary': research_result.get_iteration_summary()
             }
 
             if return_sources:
                 sources = []
-                for i, node in enumerate(research_result.final_nodes[:10], 1):
+                # Use same nodes that were used for synthesis (so citations match)
+                for i, node in enumerate(nodes_for_synthesis, 1):
                     sources.append({
                         'rank': i,
                         'title': node.metadata.get('title', 'Unknown'),
+                        'file': node.metadata.get('file_path', 'Unknown'),  # 'file' for UI consistency
                         'file_path': node.metadata.get('file_path', 'Unknown'),
                         'score': node.score or 0.0,
-                        'excerpt': node.node.text[:200] + "..." if len(node.node.text) > 200 else node.node.text
+                        'excerpt': node.node.text[:300] + "..." if len(node.node.text) > 300 else node.node.text,
+                        'source_type': node.metadata.get('source_type', 'vault')
                     })
                 result['sources'] = sources
+                result['total_sources'] = total_retrieved  # Total retrieved, not just used for synthesis
 
             return result
 
@@ -1027,6 +1132,286 @@ class UltraRAG:
     def print_token_usage(self):
         """Print formatted token usage status."""
         self.token_tracker.print_status()
+
+    # ============================================
+    # RAPTOR: Hierarchical Summaries
+    # ============================================
+
+    def _setup_raptor(self):
+        """Initialize RAPTOR index manager."""
+        logger.info("Setting up RAPTOR index manager...")
+        print("Setting up RAPTOR hierarchical summaries...")
+
+        try:
+            self.raptor_manager = RaptorIndexManager(
+                embed_model=self.embed_model,
+                llm=self.llm,
+                raptor_path=self.config.raptor.raptor_path,
+                chunk_size=self.config.raptor.chunk_size,
+                chunk_overlap=self.config.raptor.chunk_overlap,
+                similarity_top_k=self.config.raptor.similarity_top_k,
+                default_mode=self.config.raptor.mode
+            )
+            logger.info(f"RAPTOR manager initialized: mode={self.config.raptor.mode}")
+        except Exception as e:
+            logger.warning(f"Could not initialize RAPTOR manager: {e}")
+            print(f"Warning: RAPTOR initialization failed: {e}")
+            self.raptor_manager = None
+
+    def raptor_index_exists(self) -> bool:
+        """Check if RAPTOR index exists.
+
+        Returns:
+            True if RAPTOR index exists and has data
+        """
+        if self.raptor_manager is None:
+            return False
+        return self.raptor_manager.index_exists()
+
+    def index_raptor(self, force_reindex: bool = False, interactive: bool = True):
+        """Build RAPTOR hierarchical index from vault documents.
+
+        RAPTOR creates a tree of summaries through recursive clustering:
+        1. Documents are chunked and embedded
+        2. Similar chunks are clustered
+        3. Each cluster is summarized by the LLM
+        4. Process repeats to build hierarchy
+
+        Args:
+            force_reindex: Force rebuild even if index exists
+            interactive: If True, prompt for user confirmation
+        """
+        print("\n=== Building RAPTOR Hierarchical Index ===")
+
+        # Initialize RAPTOR manager if not already done
+        if self.raptor_manager is None:
+            self._setup_raptor()
+
+        if self.raptor_manager is None:
+            print("RAPTOR manager not available. Check your configuration.")
+            return
+
+        # Check for existing index
+        if not force_reindex and self.raptor_index_exists():
+            if interactive:
+                print("\nExisting RAPTOR index found.")
+                print("Options:")
+                print("  1. Load existing (fast)")
+                print("  2. Rebuild (slow, uses LLM for summarization)")
+                print("  3. Cancel")
+
+                choice = input("\nChoice (1/2/3): ").strip()
+                if choice == "1":
+                    if self.load_raptor_index():
+                        print("RAPTOR index loaded!")
+                        return
+                    print("Failed to load. Rebuilding...")
+                elif choice == "3":
+                    print("Cancelled.")
+                    return
+                # choice == "2" continues to rebuild
+            else:
+                # Non-interactive: just load
+                if self.load_raptor_index():
+                    print("RAPTOR index loaded!")
+                    return
+                print("Failed to load. Will create new index...")
+
+        # Load documents from vault
+        print(f"\nLoading documents from: {self.config.vault_path}")
+        notes = self.loader.load_vault()
+
+        if not notes:
+            print("No notes found in vault!")
+            return
+
+        print(f"Found {len(notes)} notes")
+
+        # Convert to LlamaIndex documents
+        documents = self.loader.notes_to_documents(notes)
+        print(f"Converted to {len(documents)} documents")
+
+        # Build RAPTOR index
+        print("\nBuilding RAPTOR tree (this may take several minutes)...")
+        print("Note: RAPTOR uses LLM to generate cluster summaries")
+
+        try:
+            success = self.raptor_manager.build_index(
+                documents=documents,
+                force_rebuild=force_reindex
+            )
+
+            if success:
+                print("\nRAPTOR index built successfully!")
+
+                # Print stats
+                stats = self.raptor_manager.get_summary_stats()
+                print(f"  Nodes in tree: {stats.get('node_count', 'unknown')}")
+                print(f"  Default mode: {stats.get('default_mode', 'unknown')}")
+            else:
+                print("\nFailed to build RAPTOR index.")
+
+        except Exception as e:
+            logger.error(f"RAPTOR indexing failed: {e}", exc_info=True)
+            print(f"\nError building RAPTOR index: {e}")
+
+    def load_raptor_index(self) -> bool:
+        """Load existing RAPTOR index.
+
+        Returns:
+            True if index was loaded successfully
+        """
+        if self.raptor_manager is None:
+            self._setup_raptor()
+
+        if self.raptor_manager is None:
+            return False
+
+        return self.raptor_manager.load_index()
+
+    def query_raptor(
+        self,
+        query_str: str,
+        mode: Optional[RaptorMode] = None,
+        top_k: Optional[int] = None,
+        return_sources: bool = True,
+        max_sources: Optional[int] = None
+    ):
+        """Query using RAPTOR hierarchical summaries.
+
+        RAPTOR retrieval modes:
+        - "collapsed": Treats entire tree as flat list, simple top-k (faster)
+        - "tree_traversal": Traverses hierarchy, top-k at each level (more comprehensive)
+
+        Args:
+            query_str: Query string
+            mode: Retrieval mode ("collapsed" or "tree_traversal")
+            top_k: Number of results to retrieve
+            return_sources: Include source information in response
+            max_sources: Maximum sources to include (None = all)
+
+        Returns:
+            Dictionary with answer and sources
+        """
+        if self.raptor_manager is None:
+            raise RuntimeError(
+                "RAPTOR index not available. "
+                "Run index_raptor() first or enable RAPTOR in config."
+            )
+
+        if not self.raptor_index_exists():
+            raise RuntimeError(
+                "RAPTOR index not built. Run index_raptor() first."
+            )
+
+        mode = mode or self.config.raptor.mode
+        top_k = top_k or self.config.raptor.similarity_top_k
+
+        logger.info(f"RAPTOR query: {query_str[:100]}... (mode={mode})")
+        print(f"\n🌳 RAPTOR Query (mode={mode}): {query_str}")
+        print("Searching hierarchical summaries...\n")
+
+        try:
+            # Retrieve nodes from RAPTOR tree
+            nodes = self.raptor_manager.retrieve(
+                query=query_str,
+                mode=mode,
+                top_k=top_k
+            )
+
+            if not nodes:
+                return {
+                    'answer': "No relevant information found in the RAPTOR index.",
+                    'sources': [],
+                    'total_sources': 0
+                }
+
+            # Apply max_sources limit
+            total_retrieved = len(nodes)
+            nodes_for_synthesis = nodes if max_sources is None else nodes[:max_sources]
+
+            # Build context for LLM
+            context_parts = []
+            for i, node in enumerate(nodes_for_synthesis, 1):
+                # Handle both NodeWithScore and TextNode
+                if hasattr(node, 'node'):
+                    text = node.node.text
+                    metadata = node.node.metadata
+                    score = node.score or 0.0
+                else:
+                    text = node.text
+                    metadata = node.metadata
+                    score = 0.0
+
+                title = metadata.get('title', 'Summary')
+                context_parts.append(
+                    f"[{i}] {title}\n{text}\n"
+                )
+
+            context = "\n---\n".join(context_parts)
+
+            # Generate response using LLM
+            prompt = f"""Based on the following hierarchical summaries from your knowledge base,
+answer the user's question. Use numbered citations like [1], [2] to reference specific sources.
+
+Context (from RAPTOR hierarchical summaries):
+{context}
+
+Question: {query_str}
+
+Answer:"""
+
+            response = Settings.llm.complete(prompt)
+
+            # Format result
+            result = {
+                'answer': response.text,
+                'total_sources': total_retrieved,
+                'raptor_mode': mode
+            }
+
+            if return_sources:
+                sources = []
+                for i, node in enumerate(nodes_for_synthesis, 1):
+                    if hasattr(node, 'node'):
+                        text = node.node.text
+                        metadata = node.node.metadata
+                        score = node.score or 0.0
+                    else:
+                        text = node.text
+                        metadata = node.metadata
+                        score = 0.0
+
+                    sources.append({
+                        'rank': i,
+                        'title': metadata.get('title', 'Summary'),
+                        'file': metadata.get('file_path', 'RAPTOR Summary'),
+                        'score': score,
+                        'excerpt': text[:300] + "..." if len(text) > 300 else text,
+                        'source_type': 'raptor'
+                    })
+                result['sources'] = sources
+
+            return result
+
+        except Exception as e:
+            logger.error(f"RAPTOR query failed: {e}", exc_info=True)
+            raise RuntimeError(f"RAPTOR query failed: {e}") from e
+
+    def get_raptor_stats(self) -> dict:
+        """Get RAPTOR index statistics.
+
+        Returns:
+            Dictionary with index stats
+        """
+        if self.raptor_manager is None:
+            return {
+                "exists": False,
+                "enabled": self.config.raptor.enabled,
+                "error": "RAPTOR manager not initialized"
+            }
+
+        return self.raptor_manager.get_summary_stats()
 
 
 def main():
@@ -1137,6 +1522,14 @@ def main():
             rag._setup_federated_engine()
             print("Federated search enabled (vault + conversations)")
 
+    # Check for RAPTOR index
+    if rag.config.raptor.enabled:
+        has_raptor = rag.raptor_index_exists()
+        if has_raptor:
+            print("\n🌳 RAPTOR index detected!")
+            if rag.load_raptor_index():
+                print("RAPTOR hierarchical summaries ready")
+
     # Interactive query loop
     print("\n" + "="*50)
     print("RAG system ready!")
@@ -1144,10 +1537,12 @@ def main():
     print("  'quit' - exit")
     print("  'usage' - check token usage")
     print("  'conv' - index AI conversations")
+    print("  'raptor' - build RAPTOR hierarchical index")
     print("  '@vault <query>' - search vault only")
     print("  '@conv <query>' - search conversations only")
     print("  '@all <query>' - search both (federated)")
     print("  '@research <query>' - multi-step research mode (3-5x slower, higher accuracy)")
+    print("  '@raptor <query>' - search using RAPTOR hierarchical summaries")
     print("="*50 + "\n")
 
     while True:
@@ -1167,6 +1562,11 @@ def main():
                 rag.index_conversations(Path(conv_path))
             else:
                 rag.index_conversations()
+            continue
+
+        if query.lower() == 'raptor':
+            # Build RAPTOR index
+            rag.index_raptor()
             continue
 
         if not query:
@@ -1191,6 +1591,11 @@ def main():
                 print(f"\n🔬 Research mode enabled (this may take 30-60 seconds)...")
                 result = rag.query_research(query_text)
                 mode = "research"
+            elif query.startswith('@raptor '):
+                query_text = query[8:]
+                print(f"\n🌳 RAPTOR mode enabled...")
+                result = rag.query_raptor(query_text)
+                mode = "raptor"
             else:
                 # Default: use federated if available, otherwise vault only
                 if rag.federated_engine is not None:

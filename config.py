@@ -80,7 +80,7 @@ class GraphDBConfig(BaseModel):
 class RetrievalConfig(BaseModel):
     """Retrieval configuration."""
     top_k: int = Field(default=75)
-    rerank_top_n: int = Field(default=10)
+    rerank_top_n: int = Field(default=100)  # Increased from 10 - let UI max_sources control display
     reranker_model: str = Field(default="rerank-2.5")  # Voyage model (no "voyage-" prefix!)
     reranker_token_limit: int = Field(default=200_000_000)  # 200M free tier limit
     enable_hybrid_search: bool = Field(default=True)
@@ -122,7 +122,7 @@ class LLMConfig(BaseModel):
     """LLM configuration."""
     model: str = Field(default="gemini-3-flash-preview")
     temperature: float = Field(default=0.1)
-    max_tokens: int = Field(default=8192)
+    max_tokens: int = Field(default=65536)  # Gemini 3 Flash max output
     enable_thinking_mode: bool = Field(default=True)
     backend: str = Field(default="api")  # "api" or "cli" (uses gemini CLI for separate quota)
 
@@ -167,6 +167,44 @@ class ConversationsConfig(BaseModel):
         return v
 
 
+class RaptorConfig(BaseModel):
+    """RAPTOR (Recursive Abstractive Processing for Tree-Organized Retrieval) configuration.
+
+    RAPTOR creates hierarchical summaries through recursive clustering, enabling
+    both detailed and high-level retrieval across document collections.
+    """
+    enabled: bool = Field(default=False)
+    mode: str = Field(default="collapsed")  # "collapsed" or "tree_traversal"
+    chunk_size: int = Field(default=1024)  # Chunk size for RAPTOR (must be > metadata size)
+    chunk_overlap: int = Field(default=100)
+    similarity_top_k: int = Field(default=10)  # Results per query
+    raptor_path: Path = Field(default=Path("./data/raptor"))
+
+    @field_validator('mode')
+    @classmethod
+    def validate_mode(cls, v: str) -> str:
+        """Validate RAPTOR retrieval mode."""
+        valid_modes = ["collapsed", "tree_traversal"]
+        if v.lower() not in valid_modes:
+            raise ValueError(
+                f"RAPTOR mode must be one of {valid_modes}, got '{v}'. "
+                f"'collapsed' treats tree as flat list (faster). "
+                f"'tree_traversal' traverses hierarchy (more comprehensive)."
+            )
+        return v.lower()
+
+    @field_validator('chunk_overlap')
+    @classmethod
+    def validate_raptor_chunk_overlap(cls, v: int, info: Any) -> int:
+        """Validate that chunk_overlap is less than chunk_size."""
+        chunk_size = info.data.get('chunk_size')
+        if chunk_size and v >= chunk_size:
+            raise ValueError(
+                f"chunk_overlap ({v}) must be less than chunk_size ({chunk_size})."
+            )
+        return v
+
+
 class RAGConfig(BaseModel):
     """Main RAG system configuration."""
     vault_path: Path
@@ -176,6 +214,7 @@ class RAGConfig(BaseModel):
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     conversations: ConversationsConfig = Field(default_factory=ConversationsConfig)
+    raptor: RaptorConfig = Field(default_factory=RaptorConfig)
 
     # Indexing options
     enable_checkpointing: bool = Field(default=True)
@@ -287,7 +326,7 @@ def load_config() -> RAGConfig:
         ),
         retrieval=RetrievalConfig(
             top_k=int(os.getenv("TOP_K", "75")),
-            rerank_top_n=int(os.getenv("RERANK_TOP_N", "10")),
+            rerank_top_n=int(os.getenv("RERANK_TOP_N", "100")),  # Let UI control final display count
             reranker_model=os.getenv("RERANKER_MODEL", "rerank-2.5"),
             reranker_token_limit=int(os.getenv("RERANKER_TOKEN_LIMIT", "200000000")),
             enable_hybrid_search=os.getenv("ENABLE_HYBRID_SEARCH", "true").lower() == "true",
@@ -304,7 +343,7 @@ def load_config() -> RAGConfig:
         llm=LLMConfig(
             model=os.getenv("LLM_MODEL", "gemini-3-flash-preview"),
             temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
-            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "8192")),
+            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "65536")),
             backend=os.getenv("LLM_BACKEND", "api")  # "api" or "cli"
         ),
         conversations=ConversationsConfig(
@@ -312,6 +351,14 @@ def load_config() -> RAGConfig:
             path=Path(os.getenv("CONVERSATIONS_PATH", "")) if os.getenv("CONVERSATIONS_PATH") else None,
             weight=float(os.getenv("CONVERSATIONS_WEIGHT", "0.8")),
             include_in_default_search=os.getenv("CONVERSATIONS_IN_DEFAULT_SEARCH", "true").lower() == "true"
+        ),
+        raptor=RaptorConfig(
+            enabled=os.getenv("ENABLE_RAPTOR", "false").lower() == "true",
+            mode=os.getenv("RAPTOR_MODE", "collapsed"),
+            chunk_size=int(os.getenv("RAPTOR_CHUNK_SIZE", "400")),
+            chunk_overlap=int(os.getenv("RAPTOR_CHUNK_OVERLAP", "50")),
+            similarity_top_k=int(os.getenv("RAPTOR_TOP_K", "10")),
+            raptor_path=Path(os.getenv("RAPTOR_PATH", "./data/raptor"))
         ),
         enable_checkpointing=os.getenv("ENABLE_CHECKPOINTING", "true").lower() == "true",
         voyage_api_key=SecretStr(os.getenv("VOYAGE_API_KEY", "")),

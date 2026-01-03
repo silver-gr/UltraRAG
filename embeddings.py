@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import logging
+import asyncio
 from typing import Optional, Any, Union, List
 from pydantic import SecretStr
 from llama_index.core.embeddings import BaseEmbedding
@@ -12,9 +13,22 @@ from token_tracker import get_tracker, QuotaExhaustedError
 
 logger = logging.getLogger(__name__)
 
+# Global semaphore to limit concurrent async embedding requests
+# Voyage API can handle ~5-10 concurrent requests reliably
+_EMBEDDING_SEMAPHORE: Optional[asyncio.Semaphore] = None
+_MAX_CONCURRENT_EMBEDDINGS = 5
+
+
+def _get_embedding_semaphore() -> asyncio.Semaphore:
+    """Get or create the global embedding semaphore."""
+    global _EMBEDDING_SEMAPHORE
+    if _EMBEDDING_SEMAPHORE is None:
+        _EMBEDDING_SEMAPHORE = asyncio.Semaphore(_MAX_CONCURRENT_EMBEDDINGS)
+    return _EMBEDDING_SEMAPHORE
+
 
 class TrackedVoyageEmbedding(BaseEmbedding):
-    """Voyage embedding wrapper with token usage tracking."""
+    """Voyage embedding wrapper with token usage tracking and concurrency control."""
 
     def __init__(self, base_embedding: BaseEmbedding, model_name: str):
         super().__init__()
@@ -47,26 +61,32 @@ class TrackedVoyageEmbedding(BaseEmbedding):
         return result
 
     async def _aget_text_embedding(self, text: str) -> List[float]:
-        """Async get embedding with tracking."""
+        """Async get embedding with tracking and concurrency control."""
         estimated_tokens = self._tracker.estimate_tokens([text])
 
         can_proceed, msg = self._tracker.check_embedding_quota(estimated_tokens)
         if not can_proceed:
             raise QuotaExhaustedError(msg)
 
-        result = await self._base._aget_text_embedding(text)
+        # Use semaphore to limit concurrent API requests
+        async with _get_embedding_semaphore():
+            result = await self._base._aget_text_embedding(text)
+
         self._tracker.record_embedding_usage(estimated_tokens, self._model_name)
         return result
 
     async def _aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Async get embeddings with tracking."""
+        """Async get embeddings with tracking and concurrency control."""
         estimated_tokens = self._tracker.estimate_tokens(texts)
 
         can_proceed, msg = self._tracker.check_embedding_quota(estimated_tokens)
         if not can_proceed:
             raise QuotaExhaustedError(msg)
 
-        result = await self._base._aget_text_embeddings(texts)
+        # Use semaphore to limit concurrent API requests
+        async with _get_embedding_semaphore():
+            result = await self._base._aget_text_embeddings(texts)
+
         self._tracker.record_embedding_usage(estimated_tokens, self._model_name)
         return result
 
@@ -83,14 +103,17 @@ class TrackedVoyageEmbedding(BaseEmbedding):
         return result
 
     async def _aget_query_embedding(self, query: str) -> List[float]:
-        """Async get query embedding with tracking."""
+        """Async get query embedding with tracking and concurrency control."""
         estimated_tokens = self._tracker.estimate_tokens([query])
 
         can_proceed, msg = self._tracker.check_embedding_quota(estimated_tokens)
         if not can_proceed:
             raise QuotaExhaustedError(msg)
 
-        result = await self._base._aget_query_embedding(query)
+        # Use semaphore to limit concurrent API requests
+        async with _get_embedding_semaphore():
+            result = await self._base._aget_query_embedding(query)
+
         self._tracker.record_embedding_usage(estimated_tokens, self._model_name)
         return result
 

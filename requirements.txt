@@ -9,6 +9,7 @@ llama-index-llms-google-genai  # New unified Google GenAI SDK
 llama-index-graph-stores-neo4j
 llama-index-retrievers-bm25
 llama-index-postprocessor-voyageai-rerank  # VoyageAI reranker
+llama-index-packs-raptor  # RAPTOR hierarchical summaries
 
 # Vector Database
 lancedb>=0.5.0

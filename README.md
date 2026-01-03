@@ -1,6 +1,6 @@
 # UltraRAG - World-Class RAG for Obsidian Vaults
 
-A sophisticated Retrieval-Augmented Generation (RAG) system specifically designed for personal Obsidian knowledge bases. Implements state-of-the-art techniques from 2024-2025 research including semantic chunking, hybrid retrieval, graph-based search, and advanced reranking.
+A sophisticated Retrieval-Augmented Generation (RAG) system specifically designed for personal Obsidian knowledge bases. Implements state-of-the-art techniques from 2024-2025 research including semantic chunking, hybrid retrieval, graph-based search, self-correcting retrieval, iterative research mode, and advanced reranking.
 
 ![UltraRAG Web Interface](docs/app.png)
 
@@ -18,9 +18,10 @@ A sophisticated Retrieval-Augmented Generation (RAG) system specifically designe
 - ✅ **Advanced Reranking**: Voyage Rerank 2, Jina v2, or Cohere
 - ✅ **Hybrid Retrieval**: Vector + query fusion for better results
 - ✅ **Query Transformation**: HyDE, Multi-Query expansion, or both for significantly better retrieval
-- ✅ **PTCF Prompting**: Research-backed prompt engineering for Gemini 2.0
+- ✅ **PTCF Prompting**: Research-backed prompt engineering for Gemini 3 Flash
 - ✅ **Wikilink Graph**: Builds knowledge graph from note connections
 - ✅ **AI Conversations RAG**: Federated search across your vault AND past AI conversations (ChatGPT, Claude, Gemini)
+- ✅ **Inline Citations**: Clickable `[1]`, `[2]`, `[3]` citations that link to sources
 
 ### Phase 2: Production Features (Implemented)
 - ✅ **Streamlit Web Interface**: Full-featured web UI with federated search
@@ -28,11 +29,13 @@ A sophisticated Retrieval-Augmented Generation (RAG) system specifically designe
 - ✅ **Incremental Indexing**: Checkpoint-based recovery for large vaults
 - ✅ **Wikilink Graph Retrieval**: Traverse note connections for related content
 
-### Phase 3: Advanced Features (Coming Soon)
-- 🔄 Neo4j graph database integration
-- 🔄 RAPTOR hierarchical summaries
-- 🔄 Temporal filtering (by creation/modification date)
-- 🔄 RAGAS evaluation framework
+### Phase 3: Advanced Features (Implemented)
+- ✅ **Research Mode**: Iterative multi-step retrieval with LLM-powered gap analysis (Khoj-inspired, 141% accuracy improvement)
+- ✅ **Self-Correction**: Self-RAG/CRAG patterns with relevance grading and query refinement
+- ✅ **RAGAS Evaluation**: Automated evaluation framework with faithfulness, relevancy, precision, and recall metrics
+- ✅ **RAPTOR Summaries**: Hierarchical document summaries for better context
+- ✅ **Temporal Filtering**: Filter by creation/modification date
+- 🔄 Neo4j graph database (deferred - in-memory graph sufficient for most use cases)
 
 ## Installation
 
@@ -106,6 +109,16 @@ ENABLE_HYBRID_SEARCH=true  # Use query fusion
 # Query transformation for better retrieval
 QUERY_TRANSFORM_METHOD=hyde  # Options: hyde, multi_query, both, none
 QUERY_TRANSFORM_NUM_QUERIES=3  # Number of query variations (for multi_query/both)
+
+# Self-correction (Self-RAG/CRAG patterns)
+USE_SELF_CORRECTION=true       # Enable self-correcting retrieval
+SELF_CORRECTION_MAX_RETRIES=2  # Max retry attempts with refined queries
+
+# Research Mode (iterative retrieval)
+ENABLE_RESEARCH_MODE=true           # Enable @research prefix and 🔬 checkbox
+RESEARCH_MAX_ITERATIONS=3           # Max retrieval iterations
+RESEARCH_CONFIDENCE_THRESHOLD=0.8   # Stop when confidence exceeds this
+RESEARCH_MAX_SUBQUERIES=3           # Sub-queries per iteration
 ```
 
 ### Chunking Strategies
@@ -162,6 +175,64 @@ Query transformation significantly improves retrieval by bridging the query-docu
 - Direct query embedding without transformation
 - Fastest but lower quality retrieval
 - Best for: When speed matters more than quality
+
+### Research Mode
+
+Research mode enables iterative, multi-step retrieval with LLM-powered gap analysis. Inspired by Khoj's research mode (141% accuracy improvement on benchmarks).
+
+**How It Works:**
+1. Initial retrieval with your query
+2. LLM analyzes gaps in retrieved content ("What information is still missing?")
+3. Generates refined sub-queries for missing information
+4. Retrieves again with sub-queries (up to `max_iterations`)
+5. Aggregates and deduplicates results across all iterations
+6. Synthesizes comprehensive answer from all retrieved content
+
+**Usage:**
+- **CLI**: Prefix query with `@research` - e.g., `@research what are all the productivity techniques in my notes?`
+- **Web UI**: Check the 🔬 "Research Mode" checkbox before querying
+
+**Configuration:**
+```bash
+ENABLE_RESEARCH_MODE=true           # Enable research mode (default: true)
+RESEARCH_MAX_ITERATIONS=3           # Max iterations (default: 3)
+RESEARCH_CONFIDENCE_THRESHOLD=0.8   # Stop when confident (default: 0.8)
+RESEARCH_MAX_SUBQUERIES=3           # Sub-queries per iteration (default: 3)
+```
+
+**Best For:**
+- Comprehensive research queries: "What are ALL the X in my notes?"
+- Topic synthesis: "Everything I know about habit formation"
+- Cross-reference queries: "How do my notes on X relate to Y?"
+
+### Self-Correction (Self-RAG/CRAG)
+
+Self-correction implements Self-RAG and CRAG patterns to improve retrieval quality through automatic query refinement.
+
+**How It Works:**
+1. Initial retrieval with your query
+2. LLM grades relevance: `CORRECT`, `AMBIGUOUS`, or `INCORRECT`
+3. If not `CORRECT`: LLM refines query and re-retrieves
+4. Repeats up to `max_retries` times
+5. Returns best results from all attempts
+
+**Configuration:**
+```bash
+USE_SELF_CORRECTION=true       # Enable self-correction (default: true)
+SELF_CORRECTION_MAX_RETRIES=2  # Max refinement attempts (default: 2)
+```
+
+See [docs/features/SELF_CORRECTION.md](docs/features/SELF_CORRECTION.md) for detailed documentation.
+
+### Inline Citations
+
+UltraRAG generates responses with inline citations that link to sources:
+- Citations appear as `[1]`, `[2]`, `[3]` in the response text
+- In the web UI, clicking a citation scrolls to that source
+- Sources are numbered consistently between response and source list
+
+**Example:**
+> "Atomic habits work because small changes compound over time [1]. The habit loop consists of cue, routine, and reward [3]."
 
 ## AI Conversations Integration
 
@@ -262,7 +333,7 @@ notes = rag.search_notes("project ideas", top_k=5)
     └────┬─────────┘
          │
     ┌────▼──────────┐
-    │  Generation   │  Gemini 2.0 Flash + PTCF prompts
+    │  Generation   │  Gemini 3 Flash + PTCF prompts
     └───────────────┘
 ```
 
@@ -299,6 +370,7 @@ Expected metrics on a 1,650-note vault:
 - [x] Vector indexing
 - [x] Basic retrieval
 - [x] LLM integration
+- [x] Inline citations with clickable links
 
 ### Phase 2: ✅ Production Features
 - [x] Streamlit web interface
@@ -307,11 +379,13 @@ Expected metrics on a 1,650-note vault:
 - [x] Wikilink graph retrieval
 - [x] AI conversations federated search
 
-### Phase 3: 🔄 Advanced Features
-- [ ] Neo4j graph database
-- [ ] RAPTOR hierarchical summaries
-- [ ] Temporal filtering
-- [ ] RAGAS evaluation
+### Phase 3: ✅ Advanced Features
+- [x] Research Mode (iterative retrieval with gap analysis)
+- [x] Self-Correction (Self-RAG/CRAG patterns)
+- [x] RAGAS evaluation framework
+- [x] RAPTOR hierarchical summaries
+- [x] Temporal filtering
+- [ ] Neo4j graph database (deferred - in-memory graph sufficient)
 
 ## Troubleshooting
 
@@ -349,6 +423,7 @@ Full documentation is available in the [`docs/`](docs/) folder:
 - [Quick Start Guide](docs/QUICKSTART.md)
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [Testing Guide](docs/TESTING.md)
+- [RAGAS Evaluation Guide](docs/EVALUATION.md)
 - **Feature Guides**: [Late Chunking](docs/features/LATE_CHUNKING.md) | [Query Transformation](docs/features/QUERY_TRANSFORMATION.md) | [Self-Correction](docs/features/SELF_CORRECTION.md) | [Graph Retrieval](docs/features/GRAPH_RETRIEVAL.md)
 
 ## Acknowledgments
@@ -356,8 +431,11 @@ Full documentation is available in the [`docs/`](docs/) folder:
 Based on cutting-edge RAG research from 2024-2025:
 - RAPTOR (recursive abstractive processing)
 - Late Chunking (Jina AI)
+- Self-RAG and CRAG (corrective retrieval)
+- Khoj Research Mode (iterative retrieval)
 - Voyage AI embeddings and reranking
-- Gemini 2.0 Flash thinking mode
+- RAGAS evaluation framework
+- Gemini 3 Flash
 - LlamaIndex framework
 
 ---

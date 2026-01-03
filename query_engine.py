@@ -114,11 +114,47 @@ Instructions:
 - PREMISE: What does the user already know based on their vault?
 - TASK: What specific question or need does the user have?
 - CONSTRAINTS: Only use information from the provided context. If uncertain, acknowledge limitations.
-- FORMAT: Provide clear, well-structured answers with references to specific notes when relevant.
+- FORMAT: Provide clear, well-structured answers. Use inline citations [1], [2], etc. to reference specific sources.
+- CITATIONS: When using information from a source, add the source number in brackets immediately after the statement, e.g., "Habits form through repetition [3]."
 
 Query: {query_str}
 
-Think through the relevant concepts from the knowledge base, then provide a comprehensive answer:
+Think through the relevant concepts from the knowledge base, then provide a comprehensive answer with inline citations:
+"""
+
+
+# Research Mode Template - Exhaustive, comprehensive output with inline citations
+RESEARCH_TEMPLATE = """You are a comprehensive research assistant analyzing a personal knowledge vault.
+
+Your task is to provide an EXHAUSTIVE synthesis of ALL relevant information from the retrieved sources.
+
+Context from knowledge base ({num_sources} sources):
+---------------------
+{context_str}
+---------------------
+
+Research Query: {query_str}
+
+INSTRUCTIONS FOR COMPREHENSIVE OUTPUT:
+1. **Be Exhaustive**: Include EVERY relevant piece of information from the sources. Do not summarize or abbreviate.
+2. **No Length Limits**: Generate as much content as needed - 5,000 to 10,000+ words is acceptable and encouraged.
+3. **Structure Clearly**: Use headers, bullet points, numbered lists, and sub-sections for organization.
+4. **Inline Citations**: Use [1], [2], [3] etc. to cite sources. Place the citation immediately after the statement it supports.
+   - Example: "The habit loop consists of cue, routine, and reward [3]. Implementation intentions increase success rates [7][12]."
+   - Cite EVERY claim with at least one source number.
+   - Multiple sources supporting the same point should be cited together: [3][7][12]
+5. **Categories**: Group related information into logical categories or themes.
+6. **Include Details**: Capture specific examples, techniques, frameworks, quotes, and actionable items.
+7. **Cross-References**: Note connections between different sources and concepts.
+
+OUTPUT FORMAT:
+- Start with a brief executive summary (2-3 sentences)
+- Then provide comprehensive coverage organized by theme/category
+- Include all specific items, techniques, frameworks, examples found
+- Use inline citations [N] throughout to attribute information to sources
+- End with connections and insights across the material
+
+Generate a thorough, detailed research report with inline citations. Do NOT truncate or summarize - include everything relevant:
 """
 
 

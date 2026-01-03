@@ -71,6 +71,15 @@ conversation_loader.py → federated_query.py → merged results
 - **conversation_loader.py**: Parses ChatGPT/Claude/Gemini exports, turn-aware chunking
 - **federated_query.py**: `FederatedQueryEngine` queries vault + conversations indexes in parallel, merges with configurable weights
 
+### RAPTOR Hierarchical Summaries
+```
+raptor_index.py → recursive clustering → LLM summarization → tree traversal
+```
+- **raptor_index.py**: `RaptorIndexManager` builds hierarchical summary trees
+- Two retrieval modes: `collapsed` (flat search) and `tree_traversal` (hierarchical)
+- Activates via `@raptor <query>` in CLI or RAPTOR checkbox in web UI
+- Config: `ENABLE_RAPTOR=true`, `RAPTOR_MODE=collapsed`
+
 ### Configuration
 - **config.py**: Pydantic models (`RAGConfig`, `EmbeddingConfig`, `LLMConfig`, etc.)
 - **.env**: Runtime configuration (copy from `.env.example`)
@@ -101,6 +110,7 @@ pytest -m unit            # Unit tests only
 
 ## Data Directories
 - `data/lancedb/` - Vector index (tables: `vectors` for vault, `conversations` for AI chats)
+- `data/raptor/` - RAPTOR hierarchical index (LanceDB table: `raptor_embeddings`)
 - `data/embedding_cache/` - Cached embeddings
 - `data/voyage_usage.json` - API token tracking
 - `data/index_checkpoint.json` - Indexing checkpoint
@@ -113,6 +123,17 @@ CONVERSATIONS_PATH=/path/to/ai-conversation-toolkit/output
 ```
 CLI query prefixes: `@vault`, `@conv`, `@all` to filter search scope.
 Compatible with exports from [AI Conversation Toolkit](https://github.com/silver-gr/ai-conversation-toolkit).
+
+## RAPTOR Hierarchical Summaries
+Enable RAPTOR for better multi-document reasoning through hierarchical clustering:
+```bash
+ENABLE_RAPTOR=true
+RAPTOR_MODE=collapsed  # or "tree_traversal"
+RAPTOR_CHUNK_SIZE=400
+RAPTOR_TOP_K=10
+```
+CLI: `raptor` to build index, `@raptor <query>` to search.
+Note: Building RAPTOR index uses LLM calls for cluster summarization (slower initial indexing).
 
 ## LLM Backend Options
 
