@@ -103,6 +103,28 @@ class RetrievalConfig(BaseModel):
     research_max_iterations: int = Field(default=3)
     research_confidence_threshold: float = Field(default=0.8)
     research_max_subqueries: int = Field(default=3)
+    research_max_synthesis_sources: int = Field(default=0)  # Max sources for LLM synthesis (0 = unlimited)
+
+    # Bilingual expansion settings (translate key terms to additional languages)
+    enable_bilingual_expansion: bool = Field(default=False)
+    expansion_languages: list = Field(default_factory=lambda: ["el"])  # Default: Greek
+
+    @field_validator('expansion_languages')
+    @classmethod
+    def validate_expansion_languages(cls, v: list) -> list:
+        """Validate expansion languages list."""
+        if not v:
+            return ["el"]  # Default to Greek if empty
+        # Supported language codes
+        supported = ["el", "es", "de", "fr", "it", "pt", "nl", "ru", "zh", "ja", "ko", "ar"]
+        for lang in v:
+            if lang.lower() not in supported:
+                raise ValueError(
+                    f"Unsupported language code: '{lang}'. "
+                    f"Supported: {supported}. "
+                    f"Note: 'el' = Greek, 'es' = Spanish, 'de' = German, etc."
+                )
+        return [lang.lower() for lang in v]
 
     @field_validator('query_transform_method')
     @classmethod
@@ -338,7 +360,14 @@ def load_config() -> RAGConfig:
             query_transform_method=os.getenv("QUERY_TRANSFORM_METHOD", "hyde"),
             query_transform_num_queries=int(os.getenv("QUERY_TRANSFORM_NUM_QUERIES", "3")),
             use_self_correction=os.getenv("USE_SELF_CORRECTION", "true").lower() == "true",
-            self_correction_max_retries=int(os.getenv("SELF_CORRECTION_MAX_RETRIES", "2"))
+            self_correction_max_retries=int(os.getenv("SELF_CORRECTION_MAX_RETRIES", "2")),
+            enable_research_mode=os.getenv("ENABLE_RESEARCH_MODE", "true").lower() == "true",
+            research_max_iterations=int(os.getenv("RESEARCH_MAX_ITERATIONS", "3")),
+            research_confidence_threshold=float(os.getenv("RESEARCH_CONFIDENCE_THRESHOLD", "0.8")),
+            research_max_subqueries=int(os.getenv("RESEARCH_MAX_SUBQUERIES", "3")),
+            research_max_synthesis_sources=int(os.getenv("RESEARCH_MAX_SYNTHESIS_SOURCES", "0")),  # 0 = unlimited
+            enable_bilingual_expansion=os.getenv("ENABLE_BILINGUAL_EXPANSION", "false").lower() == "true",
+            expansion_languages=[lang.strip() for lang in os.getenv("EXPANSION_LANGUAGES", "el").split(",")]
         ),
         llm=LLMConfig(
             model=os.getenv("LLM_MODEL", "gemini-3-flash-preview"),

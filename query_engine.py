@@ -277,7 +277,9 @@ class QueryTransformRetriever(BaseRetriever):
         base_retriever: BaseRetriever,
         query_transformer: Optional[QueryTransformer] = None,
         transform_method: str = "hyde",
-        num_queries: int = 3
+        num_queries: int = 3,
+        enable_bilingual: bool = False,
+        bilingual_languages: List[str] = None
     ):
         """
         Initialize query transform retriever.
@@ -287,11 +289,15 @@ class QueryTransformRetriever(BaseRetriever):
             query_transformer: QueryTransformer instance (optional)
             transform_method: Transformation method to use
             num_queries: Number of query variations for multi-query
+            enable_bilingual: Whether to enable bilingual query expansion
+            bilingual_languages: List of language codes for bilingual expansion (e.g., ["el"])
         """
         self.base_retriever = base_retriever
         self.query_transformer = query_transformer
         self.transform_method = transform_method.lower()
         self.num_queries = num_queries
+        self.enable_bilingual = enable_bilingual
+        self.bilingual_languages = bilingual_languages or ["el"]
         super().__init__()
 
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
@@ -301,6 +307,11 @@ class QueryTransformRetriever(BaseRetriever):
         # If no transformer or method is 'none'/'disabled', use base retriever
         if self.query_transformer is None or self.transform_method in ["none", "disabled"]:
             logger.debug("Query transformation disabled, using original query")
+
+            # Even with transformation disabled, we can still do bilingual expansion
+            if self.enable_bilingual and self.query_transformer is not None:
+                return self._retrieve_with_bilingual(original_query)
+
             return self.base_retriever.retrieve(query_bundle)
 
         # Apply query transformation
@@ -320,6 +331,11 @@ class QueryTransformRetriever(BaseRetriever):
             # Retrieve using hypothetical document
             nodes = self.base_retriever.retrieve(transformed_bundle)
             logger.info(f"Retrieved {len(nodes)} nodes using HyDE transformation")
+
+            # Augment with bilingual expansion if enabled
+            if self.enable_bilingual:
+                nodes = self._combine_with_bilingual(nodes, original_query)
+
             return nodes
 
         elif self.transform_method == "multi_query":
@@ -356,6 +372,11 @@ class QueryTransformRetriever(BaseRetriever):
             combined_nodes.sort(key=lambda x: x.score or 0, reverse=True)
 
             logger.info(f"Retrieved {len(combined_nodes)} unique nodes from multi-query expansion")
+
+            # Augment with bilingual expansion if enabled
+            if self.enable_bilingual:
+                combined_nodes = self._combine_with_bilingual(combined_nodes, original_query)
+
             return combined_nodes
 
         elif self.transform_method == "both":
@@ -395,11 +416,107 @@ class QueryTransformRetriever(BaseRetriever):
             combined_nodes.sort(key=lambda x: x.score or 0, reverse=True)
 
             logger.info(f"Retrieved {len(combined_nodes)} unique nodes from combined HyDE + multi-query")
+
+            # Augment with bilingual expansion if enabled
+            if self.enable_bilingual:
+                combined_nodes = self._combine_with_bilingual(combined_nodes, original_query)
+
             return combined_nodes
 
         else:
             logger.warning(f"Unknown transform method: {self.transform_method}, using original query")
             return self.base_retriever.retrieve(query_bundle)
+
+    def _retrieve_with_bilingual(self, original_query: str) -> List[NodeWithScore]:
+        """
+        Perform retrieval with bilingual query expansion.
+
+        Generates translated queries and retrieves with all of them,
+        combining results using deduplication.
+
+        Args:
+            original_query: The original query string
+
+        Returns:
+            Combined and deduplicated nodes from all language variations
+        """
+        logger.info(f"Applying bilingual expansion to languages: {self.bilingual_languages}")
+
+        # Get bilingual query expansions
+        query_variations = self.query_transformer.bilingual_expand(
+            original_query,
+            target_languages=self.bilingual_languages
+        )
+
+        logger.info(f"Generated {len(query_variations)} bilingual query variations")
+
+        # Retrieve with each query variation
+        all_nodes: Dict[str, NodeWithScore] = {}
+
+        for i, query_var in enumerate(query_variations):
+            logger.debug(f"Retrieving with bilingual variation {i+1}: {query_var[:100]}...")
+            var_bundle = QueryBundle(query_str=query_var)
+            var_nodes = self.base_retriever.retrieve(var_bundle)
+
+            # Combine results with deduplication
+            for node in var_nodes:
+                node_id = node.node.node_id
+                if node_id in all_nodes:
+                    existing_score = all_nodes[node_id].score or 0
+                    new_score = node.score or 0
+                    all_nodes[node_id].score = max(existing_score, new_score)
+                else:
+                    all_nodes[node_id] = node
+
+        # Sort by score
+        combined_nodes = list(all_nodes.values())
+        combined_nodes.sort(key=lambda x: x.score or 0, reverse=True)
+
+        logger.info(f"Retrieved {len(combined_nodes)} unique nodes from bilingual expansion")
+        return combined_nodes
+
+    def _combine_with_bilingual(self, nodes: List[NodeWithScore], original_query: str) -> List[NodeWithScore]:
+        """
+        Augment existing retrieval results with bilingual expansion.
+
+        Args:
+            nodes: Nodes already retrieved by primary transformation method
+            original_query: The original query for bilingual expansion
+
+        Returns:
+            Combined nodes from primary retrieval and bilingual expansion
+        """
+        if not self.enable_bilingual or self.query_transformer is None:
+            return nodes
+
+        logger.debug("Augmenting results with bilingual expansion...")
+
+        # Get additional nodes from bilingual queries
+        bilingual_nodes = self._retrieve_with_bilingual(original_query)
+
+        # Merge with existing nodes
+        all_nodes: Dict[str, NodeWithScore] = {}
+
+        # Add existing nodes first
+        for node in nodes:
+            all_nodes[node.node.node_id] = node
+
+        # Add bilingual nodes (don't override existing higher scores)
+        for node in bilingual_nodes:
+            node_id = node.node.node_id
+            if node_id in all_nodes:
+                existing_score = all_nodes[node_id].score or 0
+                new_score = node.score or 0
+                all_nodes[node_id].score = max(existing_score, new_score)
+            else:
+                all_nodes[node_id] = node
+
+        # Sort by score
+        combined_nodes = list(all_nodes.values())
+        combined_nodes.sort(key=lambda x: x.score or 0, reverse=True)
+
+        logger.info(f"Combined {len(nodes)} primary + bilingual = {len(combined_nodes)} total nodes")
+        return combined_nodes
 
 
 class RAGQueryEngine:
@@ -445,11 +562,25 @@ class RAGQueryEngine:
         # Wrap with query transformation if enabled
         if self.query_transformer and self.config.retrieval.query_transform_method not in ["none", "disabled"]:
             logger.info(f"Query transformation enabled: {self.config.retrieval.query_transform_method}")
+            if self.config.retrieval.enable_bilingual_expansion:
+                logger.info(f"Bilingual expansion enabled for: {self.config.retrieval.expansion_languages}")
             retriever = QueryTransformRetriever(
                 base_retriever=base_retriever,
                 query_transformer=self.query_transformer,
                 transform_method=self.config.retrieval.query_transform_method,
-                num_queries=self.config.retrieval.query_transform_num_queries
+                num_queries=self.config.retrieval.query_transform_num_queries,
+                enable_bilingual=self.config.retrieval.enable_bilingual_expansion,
+                bilingual_languages=self.config.retrieval.expansion_languages
+            )
+        elif self.query_transformer and self.config.retrieval.enable_bilingual_expansion:
+            # Bilingual expansion can work even without other transformations
+            logger.info(f"Bilingual expansion enabled (standalone) for: {self.config.retrieval.expansion_languages}")
+            retriever = QueryTransformRetriever(
+                base_retriever=base_retriever,
+                query_transformer=self.query_transformer,
+                transform_method="none",
+                enable_bilingual=True,
+                bilingual_languages=self.config.retrieval.expansion_languages
             )
         else:
             logger.info("Query transformation disabled")
@@ -470,18 +601,18 @@ class RAGQueryEngine:
 
         # Configure post-processors
         node_postprocessors = []
-        
+
         # Add reranker if available
         if self.reranker:
             node_postprocessors.append(self.reranker)
-        
+
         # Add similarity filter
         node_postprocessors.append(
             SimilarityPostprocessor(
                 similarity_cutoff=self.config.retrieval.similarity_threshold
             )
         )
-        
+
         # Configure response synthesizer with custom prompts
         qa_prompt = PromptTemplate(PTCF_TEMPLATE)
         refine_prompt = PromptTemplate(REFINE_TEMPLATE)
@@ -673,11 +804,25 @@ class HybridQueryEngine:
         # Wrap with query transformation if enabled
         if self.query_transformer and self.config.retrieval.query_transform_method not in ["none", "disabled"]:
             logger.info(f"Query transformation enabled: {self.config.retrieval.query_transform_method}")
+            if self.config.retrieval.enable_bilingual_expansion:
+                logger.info(f"Bilingual expansion enabled for: {self.config.retrieval.expansion_languages}")
             retriever = QueryTransformRetriever(
                 base_retriever=base_retriever,
                 query_transformer=self.query_transformer,
                 transform_method=self.config.retrieval.query_transform_method,
-                num_queries=self.config.retrieval.query_transform_num_queries
+                num_queries=self.config.retrieval.query_transform_num_queries,
+                enable_bilingual=self.config.retrieval.enable_bilingual_expansion,
+                bilingual_languages=self.config.retrieval.expansion_languages
+            )
+        elif self.query_transformer and self.config.retrieval.enable_bilingual_expansion:
+            # Bilingual expansion can work even without other transformations
+            logger.info(f"Bilingual expansion enabled (standalone) for: {self.config.retrieval.expansion_languages}")
+            retriever = QueryTransformRetriever(
+                base_retriever=base_retriever,
+                query_transformer=self.query_transformer,
+                transform_method="none",
+                enable_bilingual=True,
+                bilingual_languages=self.config.retrieval.expansion_languages
             )
         else:
             logger.info("Query transformation disabled")

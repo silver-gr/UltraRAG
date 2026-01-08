@@ -1,0 +1,24 @@
+{
+  "name": "UltraRAG - Obsidian Knowledge Assistant",
+  "short_name": "UltraRAG",
+  "description": "World-class RAG system for your personal Obsidian knowledge base",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0e1117",
+  "theme_color": "#ff4b4b",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/app/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/app/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
