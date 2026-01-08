@@ -292,27 +292,53 @@ st.set_page_config(
     layout="wide"
 )
 
-# PWA (Progressive Web App) meta tags for installable app
-# Enables "Add to Home Screen" on mobile and "Install App" on desktop
-st.markdown("""
-    <link rel="manifest" href="/app/static/manifest.json">
-    <link rel="apple-touch-icon" href="/app/static/apple-touch-icon.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="/app/static/favicon-32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="/app/static/favicon-16.png">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="UltraRAG">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="theme-color" content="#ff4b4b">
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+# PWA (Progressive Web App) - inject into parent document head
+# components.html runs in sandboxed iframe, so we use parent.document to escape
+import streamlit.components.v1 as components
+components.html("""
     <script>
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/app/static/sw.js')
-                .then(reg => console.log('SW registered:', reg.scope))
-                .catch(err => console.log('SW failed:', err));
+        try {
+            // Access parent document (Streamlit's main window)
+            const parentDoc = window.parent.document;
+            const head = parentDoc.head || parentDoc.getElementsByTagName('head')[0];
+
+            // Only inject once (check for existing manifest)
+            if (!parentDoc.querySelector('link[rel="manifest"]')) {
+                // Manifest
+                const manifest = parentDoc.createElement('link');
+                manifest.rel = 'manifest';
+                manifest.href = '/app/static/manifest.json';
+                head.appendChild(manifest);
+
+                // Theme color
+                const theme = parentDoc.createElement('meta');
+                theme.name = 'theme-color';
+                theme.content = '#ff4b4b';
+                head.appendChild(theme);
+
+                console.log('PWA manifest injected into parent document');
+            }
+
+            // Register service worker in parent window context
+            // Use inline blob to avoid MIME type issues with Streamlit static serving
+            const swCode = `
+                self.addEventListener('install', (event) => { self.skipWaiting(); });
+                self.addEventListener('activate', (event) => { event.waitUntil(clients.claim()); });
+                self.addEventListener('fetch', (event) => { event.respondWith(fetch(event.request)); });
+            `;
+
+            if ('serviceWorker' in window.parent.navigator) {
+                const blob = new Blob([swCode], { type: 'application/javascript' });
+                const swUrl = URL.createObjectURL(blob);
+                window.parent.navigator.serviceWorker.register(swUrl, { scope: '/' })
+                    .then(reg => console.log('SW registered:', reg.scope))
+                    .catch(err => console.log('SW registration failed:', err));
+            }
+        } catch (e) {
+            console.log('PWA injection failed (cross-origin):', e);
         }
     </script>
-""", unsafe_allow_html=True)
+""", height=0)
 
 # Initialize session state
 if 'rag' not in st.session_state:
