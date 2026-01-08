@@ -305,6 +305,13 @@ st.markdown("""
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="theme-color" content="#ff4b4b">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/app/static/sw.js')
+                .then(reg => console.log('SW registered:', reg.scope))
+                .catch(err => console.log('SW failed:', err));
+        }
+    </script>
 """, unsafe_allow_html=True)
 
 # Initialize session state
