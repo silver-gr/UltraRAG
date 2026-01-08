@@ -46,3 +46,4 @@ pytest-cov>=4.0.0
 # Web Interface (optional)
 streamlit
 plotly
+watchdog  # Better Streamlit file watching performance

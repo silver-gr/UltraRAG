@@ -33,6 +33,57 @@ pytest --cov=. --cov-report=html && open htmlcov/index.html
 python check_setup.py
 ```
 
+## Web Interface Auto-Load
+The Streamlit web interface (`app.py`) auto-loads the existing index on startup:
+```bash
+# Add to .env (enabled by default)
+AUTOLOAD_INDEX=true
+```
+- When `true`: Index loads automatically when Streamlit starts (no button click needed)
+- When `false`: Manual "Load Existing Index" button required (useful for debugging)
+- Status shows "(auto-loaded)" to indicate automatic loading
+
+## Disk Cache (Fast Restarts)
+Docstore nodes are cached to disk for fast app restarts (~2s vs ~10s):
+```bash
+# Cache location
+data/cache/docstore_nodes.pkl
+
+# Invalidate cache (terminal)
+touch data/.cache_invalid
+
+# Invalidate cache (CLI)
+python main.py  # then type: cache
+
+# Invalidate cache (Python)
+from vector_store import invalidate_cache
+invalidate_cache()
+```
+Cache auto-invalidates when index row count changes. Manual invalidation needed after re-indexing with same document count.
+
+## Install as App (PWA)
+UltraRAG can be installed as a standalone app on your dock/home screen:
+
+**macOS (Chrome/Edge):**
+1. Open `http://localhost:8501` in Chrome/Edge
+2. Click the install icon in the URL bar (or Menu → "Install UltraRAG...")
+3. App appears in your Applications folder and Dock
+
+**macOS (Safari):**
+1. Open `http://localhost:8501` in Safari
+2. File → "Add to Dock"
+
+**iOS (iPhone/iPad):**
+1. Open `http://your-mac-ip:8501` in Safari
+2. Tap Share → "Add to Home Screen"
+3. App icon appears on home screen
+
+**Android:**
+1. Open `http://your-mac-ip:8501` in Chrome
+2. Tap Menu → "Add to Home Screen" or "Install App"
+
+Note: For mobile access, run Streamlit with `--server.address 0.0.0.0` to allow network access.
+
 ## Architecture
 
 ### Entry Points
@@ -62,7 +113,8 @@ research_mode.py → multi-step retrieval → gap analysis → refined queries
 ```
 - **research_mode.py**: `ResearchRetriever` performs iterative retrieval with LLM-powered gap analysis
 - Activates via `@research <query>` in CLI or 🔬 checkbox in web UI
-- Config: `research_max_iterations=3`, `research_confidence_threshold=0.8`
+- **Important:** Research mode uses its own synthesis limit (`RESEARCH_MAX_SYNTHESIS_SOURCES=0`), NOT the UI "Max sources" dropdown. This allows deep analysis while the dropdown only controls display count.
+- Config: `research_max_iterations=3`, `research_confidence_threshold=0.8`, `research_max_synthesis_sources=0` (0 = unlimited)
 
 ### Federated Retrieval (AI Conversations)
 ```
@@ -135,6 +187,17 @@ RAPTOR_TOP_K=10
 CLI: `raptor` to build index, `@raptor <query>` to search.
 Note: Building RAPTOR index uses LLM calls for cluster summarization (slower initial indexing).
 
+## Bilingual Query Expansion
+Enable bilingual expansion to search English queries in other languages (e.g., Greek notes):
+```bash
+ENABLE_BILINGUAL_EXPANSION=true
+EXPANSION_LANGUAGES=el  # Comma-separated: el,es,de for Greek, Spanish, German
+```
+- Translates key nouns/concepts (not full query) to target languages
+- Augments existing query transformation (HyDE, multi-query) rather than replacing
+- Supported languages: el (Greek), es (Spanish), de (German), fr (French), it (Italian), pt (Portuguese), nl (Dutch), ru (Russian), zh (Chinese), ja (Japanese), ko (Korean), ar (Arabic)
+- Example: "habits for productivity" also searches for "συνήθειες για παραγωγικότητα"
+
 ## LLM Backend Options
 
 Two LLM backends are available (set `LLM_BACKEND` in .env):
@@ -159,6 +222,16 @@ Then set `LLM_BACKEND=cli` in your .env file.
 - Chunk size: 512 tokens, overlap: 75
 - Retrieval: top_k=75 → rerank to top_n=10
 - Similarity threshold: 0.3 (only applied when no reranker is configured)
+
+## Obsidian URI Links
+Enable clickable source links that open notes directly in Obsidian:
+```bash
+# Add to .env - must match your vault name exactly (case-sensitive)
+OBSIDIAN_VAULT_NAME=Silver Personal
+```
+- When configured, source file paths in the web UI become clickable
+- Clicking opens the note directly in Obsidian via `obsidian://` URI scheme
+- Works for vault sources only (not AI conversation sources)
 
 ## RAGAS Evaluation
 Run automated evaluation with RAGAS metrics:

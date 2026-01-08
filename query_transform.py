@@ -12,6 +12,10 @@ improve retrieval quality by bridging the query-document vocabulary gap:
 
 3. Combined Approach: Generates multiple query variations AND creates hypothetical
    documents for each, combining the benefits of both techniques.
+
+4. Bilingual Expansion: Translates key concepts/terms in the query to additional
+   languages (e.g., Greek) to find content written in those languages. Lightweight
+   translation of nouns and concepts rather than full query translation.
 """
 
 import logging
@@ -145,6 +149,106 @@ Generate {num_queries} alternative search queries, one per line, without numberi
 
         except Exception as e:
             logger.warning(f"Multi-query expansion failed: {e}. Using original query only.")
+            return [query]
+
+    # Language name mapping for prompts
+    LANGUAGE_NAMES = {
+        "el": "Greek (Ελληνικά)",
+        "es": "Spanish (Español)",
+        "de": "German (Deutsch)",
+        "fr": "French (Français)",
+        "it": "Italian (Italiano)",
+        "pt": "Portuguese (Português)",
+        "nl": "Dutch (Nederlands)",
+        "ru": "Russian (Русский)",
+        "zh": "Chinese (中文)",
+        "ja": "Japanese (日本語)",
+        "ko": "Korean (한국어)",
+        "ar": "Arabic (العربية)"
+    }
+
+    def bilingual_expand(
+        self,
+        query: str,
+        target_languages: List[str] = None
+    ) -> List[str]:
+        """
+        Expand query with translations of key terms to target languages.
+
+        This is a lightweight expansion that translates key nouns and concepts
+        rather than the full query, enabling retrieval of documents written
+        in other languages that discuss the same topics.
+
+        Args:
+            query: Original user query (in English or any language)
+            target_languages: List of language codes (e.g., ["el", "es"]).
+                            Defaults to ["el"] (Greek).
+
+        Returns:
+            List of queries including original + translated versions
+        """
+        if target_languages is None:
+            target_languages = ["el"]
+
+        logger.debug(f"Bilingual expansion for query: {query[:100]}... to {target_languages}")
+
+        # Build language names for the prompt
+        lang_names = [self.LANGUAGE_NAMES.get(lang, lang) for lang in target_languages]
+        languages_str = ", ".join(lang_names)
+
+        prompt = f"""You are helping to search a bilingual knowledge base containing notes in English and other languages.
+
+For the following query, translate the KEY CONCEPTS and NOUNS to the target language(s). This is NOT a full translation - focus on:
+- Main nouns and topics (e.g., "habits" → "συνήθειες")
+- Key concepts (e.g., "productivity" → "παραγωγικότητα")
+- Important terms the user might have written notes about in the target language
+
+Original query: {query}
+
+Target language(s): {languages_str}
+
+For EACH target language, provide a search query that includes the translated key terms. The translated query should be useful for finding documents written in that language about the same topic.
+
+Output one translated query per line, without numbering or prefixes. If the original query already contains terms in a target language, still output a version with any additional English terms translated:"""
+
+        try:
+            response = self.llm.complete(prompt)
+            translations_text = response.text.strip()
+
+            # Parse translations
+            translations = [
+                line.strip()
+                for line in translations_text.split('\n')
+                if line.strip() and not line.strip().startswith(('#', '-', '*'))
+            ]
+
+            # Clean up any numbering or bullets
+            cleaned_translations = []
+            for trans in translations:
+                cleaned = trans
+                if len(trans) > 2:
+                    for prefix in ['1.', '2.', '3.', '1)', '2)', '3)', '- ', '* ', '• ']:
+                        if cleaned.startswith(prefix):
+                            cleaned = cleaned[len(prefix):].strip()
+                if cleaned:
+                    cleaned_translations.append(cleaned)
+
+            # Take one translation per target language (limit to len(target_languages))
+            translations = cleaned_translations[:len(target_languages)]
+
+            # Always include original query first
+            all_queries = [query] + translations
+
+            logger.info(f"Bilingual expansion: {len(translations)} translated queries generated")
+            # Log full queries for debugging
+            for i, q in enumerate(all_queries):
+                label = "Original" if i == 0 else f"Translated {i}"
+                logger.info(f"  [{label}]: {q}")
+
+            return all_queries
+
+        except Exception as e:
+            logger.warning(f"Bilingual expansion failed: {e}. Using original query only.")
             return [query]
 
     def transform_query(

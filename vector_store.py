@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import logging
+import pickle
+import hashlib
 from pathlib import Path
 from typing import Any
 from llama_index.core import VectorStoreIndex, StorageContext
@@ -11,6 +13,93 @@ from llama_index.core.embeddings import BaseEmbedding
 from config import VectorDBConfig
 
 logger = logging.getLogger(__name__)
+
+# Disk cache for expensive operations (survives app restarts)
+CACHE_DIR = Path("data/cache")
+NODES_CACHE_FILE = CACHE_DIR / "docstore_nodes.pkl"
+
+
+def _get_index_hash(config: VectorDBConfig) -> str:
+    """Get hash of index to detect changes."""
+    import lancedb
+    db = lancedb.connect(str(config.lancedb_path))
+    table = db.open_table("obsidian_embeddings")
+    count = table.count_rows()
+    return hashlib.md5(f"{count}".encode()).hexdigest()[:8]
+
+
+def _load_cached_nodes(config: VectorDBConfig) -> list[TextNode] | None:
+    """Load nodes from disk cache if valid.
+
+    Note: Cache stores node metadata only (not embeddings) for speed.
+    Embeddings are loaded separately from LanceDB when needed.
+    """
+    if not NODES_CACHE_FILE.exists():
+        return None
+
+    try:
+        with open(NODES_CACHE_FILE, 'rb') as f:
+            cached = pickle.load(f)
+
+        # Validate cache by comparing row count hash
+        current_hash = _get_index_hash(config)
+        if cached.get('hash') != current_hash:
+            logger.info(f"Cache invalid (hash: {cached.get('hash')} vs {current_hash})")
+            return None
+
+        # Reconstruct TextNode objects from cached data
+        node_data_list = cached.get('nodes', [])
+        nodes = [
+            TextNode(id_=nd['id_'], text=nd['text'], metadata=nd['metadata'])
+            for nd in node_data_list
+        ]
+        logger.info(f"Loaded {len(nodes)} nodes from disk cache")
+        return nodes
+    except Exception as e:
+        logger.warning(f"Failed to load cache: {e}")
+        return None
+
+
+def _save_nodes_to_cache(nodes: list[TextNode], config: VectorDBConfig) -> None:
+    """Save nodes to disk cache (metadata only, no embeddings for speed)."""
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        current_hash = _get_index_hash(config)
+
+        # Store only essential data (no embeddings - they're huge)
+        node_data_list = [
+            {'id_': n.id_, 'text': n.text, 'metadata': n.metadata}
+            for n in nodes
+        ]
+
+        with open(NODES_CACHE_FILE, 'wb') as f:
+            pickle.dump({'hash': current_hash, 'nodes': node_data_list}, f)
+
+        logger.info(f"Saved {len(nodes)} nodes to disk cache")
+    except Exception as e:
+        logger.warning(f"Failed to save cache: {e}")
+
+
+def invalidate_cache() -> bool:
+    """Invalidate all disk caches. Call this after re-indexing.
+
+    Returns:
+        True if cache was invalidated, False if no cache existed
+    """
+    invalidated = False
+
+    if NODES_CACHE_FILE.exists():
+        NODES_CACHE_FILE.unlink()
+        logger.info(f"Deleted docstore cache: {NODES_CACHE_FILE}")
+        invalidated = True
+
+    # Also touch the Streamlit cache invalidation file
+    streamlit_cache_file = Path("data/.cache_invalid")
+    streamlit_cache_file.parent.mkdir(parents=True, exist_ok=True)
+    streamlit_cache_file.touch()
+    logger.info("Touched Streamlit cache invalidation file")
+
+    return invalidated
 
 
 def index_exists(config: VectorDBConfig) -> bool:
@@ -234,11 +323,19 @@ def load_vector_index(
 
         logger.info("Vector index loaded successfully")
 
-        # Reconstruct docstore from LanceDB metadata
+        # Reconstruct docstore from LanceDB metadata (with disk cache)
         # LlamaIndex's from_vector_store() creates an empty in-memory docstore
         if config and config.db_type.lower() == "lancedb":
-            logger.info("Reconstructing docstore from LanceDB metadata...")
-            nodes = _reconstruct_nodes_from_lancedb(config)
+            # Try disk cache first (survives app restarts)
+            nodes = _load_cached_nodes(config)
+
+            if nodes is None:
+                # Cache miss - reconstruct from LanceDB
+                logger.info("Reconstructing docstore from LanceDB metadata...")
+                nodes = _reconstruct_nodes_from_lancedb(config)
+                if nodes:
+                    _save_nodes_to_cache(nodes, config)
+
             if nodes:
                 for node in nodes:
                     index.docstore.add_documents([node])

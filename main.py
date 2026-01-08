@@ -30,15 +30,34 @@ from federated_query import FederatedQueryEngine, IndexSource
 from temporal_filter import create_temporal_filter, DateFilterPreset
 from raptor_index import RaptorIndexManager, RaptorMode
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('ultrarag.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# Configure logging (with guard to prevent duplicate handlers in Streamlit)
+def _setup_logging():
+    """Setup logging once, avoiding duplicate handlers when imported multiple times."""
+    root_logger = logging.getLogger()
+
+    # Check if we already have our handlers (prevents Streamlit duplicate logs)
+    has_file_handler = any(isinstance(h, logging.FileHandler) for h in root_logger.handlers)
+    has_stream_handler = any(
+        isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
+        for h in root_logger.handlers
+    )
+
+    root_logger.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+    # Add file handler if not present
+    if not has_file_handler:
+        file_handler = logging.FileHandler('ultrarag.log')
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+
+    # Add stream handler if not present (avoids duplication with Streamlit's handler)
+    if not has_stream_handler:
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(formatter)
+        root_logger.addHandler(stream_handler)
+
+_setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -1069,9 +1088,12 @@ class UltraRAG:
                 if temporal_filter:
                     all_retrieved = temporal_filter._postprocess_nodes(all_retrieved)
 
-            # Apply max_sources limit to nodes used for synthesis (so citations match displayed sources)
+            # Research mode uses ALL sources for synthesis (0 = unlimited, default)
+            # UI dropdown only controls display count, not synthesis depth
             total_retrieved = len(all_retrieved)
-            nodes_for_synthesis = all_retrieved if max_sources is None else all_retrieved[:max_sources]
+            synthesis_limit = self.config.retrieval.research_max_synthesis_sources
+            # 0 means unlimited - use all retrieved nodes
+            nodes_for_synthesis = all_retrieved[:synthesis_limit] if synthesis_limit > 0 else all_retrieved
             num_sources = len(nodes_for_synthesis)
 
             logger.info(f"Research synthesis: using {num_sources} of {total_retrieved} nodes for output")
@@ -1538,6 +1560,7 @@ def main():
     print("  'usage' - check token usage")
     print("  'conv' - index AI conversations")
     print("  'raptor' - build RAPTOR hierarchical index")
+    print("  'cache' - invalidate disk cache (force reload)")
     print("  '@vault <query>' - search vault only")
     print("  '@conv <query>' - search conversations only")
     print("  '@all <query>' - search both (federated)")
@@ -1567,6 +1590,15 @@ def main():
         if query.lower() == 'raptor':
             # Build RAPTOR index
             rag.index_raptor()
+            continue
+
+        if query.lower() == 'cache':
+            # Invalidate cache
+            from vector_store import invalidate_cache
+            if invalidate_cache():
+                print("✅ Cache invalidated. Restart app to reload.")
+            else:
+                print("No cache to invalidate.")
             continue
 
         if not query:
