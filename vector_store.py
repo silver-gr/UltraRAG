@@ -250,7 +250,10 @@ def create_vector_index(
         raise RuntimeError(f"Failed to create vector index: {e}") from e
 
 
-def _reconstruct_nodes_from_lancedb(config: VectorDBConfig) -> list[TextNode]:
+def reconstruct_nodes_from_lancedb(
+    config: VectorDBConfig,
+    table_name: str = "obsidian_embeddings"
+) -> list[TextNode]:
     """Reconstruct TextNodes from LanceDB metadata.
 
     LlamaIndex's from_vector_store() creates an empty in-memory docstore.
@@ -259,6 +262,7 @@ def _reconstruct_nodes_from_lancedb(config: VectorDBConfig) -> list[TextNode]:
 
     Args:
         config: Vector database configuration
+        table_name: Name of the LanceDB table (default: obsidian_embeddings)
 
     Returns:
         List of TextNode objects reconstructed from LanceDB
@@ -266,7 +270,7 @@ def _reconstruct_nodes_from_lancedb(config: VectorDBConfig) -> list[TextNode]:
     import lancedb
 
     db = lancedb.connect(str(config.lancedb_path))
-    table = db.open_table("obsidian_embeddings")
+    table = db.open_table(table_name)
     df = table.to_pandas()
 
     nodes = []
@@ -332,7 +336,7 @@ def load_vector_index(
             if nodes is None:
                 # Cache miss - reconstruct from LanceDB
                 logger.info("Reconstructing docstore from LanceDB metadata...")
-                nodes = _reconstruct_nodes_from_lancedb(config)
+                nodes = reconstruct_nodes_from_lancedb(config)
                 if nodes:
                     _save_nodes_to_cache(nodes, config)
 

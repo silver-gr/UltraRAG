@@ -356,7 +356,9 @@ if 'autoload_attempted' not in st.session_state:
 if 'loaded_history_result' not in st.session_state:
     st.session_state.loaded_history_result = None
 if 'pending_result' not in st.session_state:
-    st.session_state.pending_result = None
+    st.session_state.pending_result = None  # Stores result for display after rerun
+if 'history_updated' not in st.session_state:
+    st.session_state.history_updated = False  # Flag to prevent double rerun
 
 # Auto-load existing index on startup using cache (if AUTOLOAD_INDEX=true)
 # Cache persists across reruns - only reloads on app restart or cache invalidation
@@ -648,8 +650,73 @@ def main():
                 help="Maximum number of sources to use for synthesis"
             )
 
+        # Display pending result (from rerun after save)
+        if st.session_state.pending_result and not search_button:
+            pending = st.session_state.pending_result
+            result = pending['result']
+            exec_time = pending['exec_time']
+            search_scope = pending.get('search_scope', '📓 Vault Only')
+            research_mode = pending.get('research_mode', False)
+
+            # Clear pending result after retrieving
+            st.session_state.pending_result = None
+
+            # Display execution summary
+            total_sources = len(result['sources'])
+            word_count = len(result['answer'].split())
+            st.markdown(
+                f"**Synthesized from {total_sources} sources** "
+                f"→ **{word_count:,} words** in **{exec_time:.1f}s** "
+                f"• *saved to history*"
+            )
+
+            # Display answer with clickable citation links
+            st.markdown("### 📝 Answer")
+            answer_with_links = linkify_citations(result['answer'])
+            st.markdown(answer_with_links, unsafe_allow_html=True)
+
+            # Build source map for wikilink replacement
+            source_map = {
+                source['rank']: source['title']
+                for source in result['sources']
+            }
+
+            # Generate copy versions
+            clean_text = strip_citations(result['answer'])
+            linked_text = format_with_wikilink_footnotes(result['answer'], source_map)
+            render_copy_buttons(clean_text, linked_text)
+
+            # Show research summary for research mode
+            if research_mode and 'research_summary' in result:
+                with st.expander("🔬 Research Details", expanded=False):
+                    st.text(result['research_summary'])
+
+            # Show source summary for federated queries
+            if search_scope == "🔀 Both" and 'source_summary' in result:
+                summary = result.get('source_summary', {})
+                if summary:
+                    by_type = summary.get('by_type', {})
+                    vault_count = by_type.get('vault', 0)
+                    conv_count = by_type.get('conversations', 0)
+                    st.info(f"📊 Sources: {vault_count} from vault, {conv_count} from conversations")
+
+            # Display all sources used in synthesis
+            st.markdown(f"### 📚 Sources ({len(result['sources'])})")
+            for source in result['sources']:
+                source_type = source.get('source_type', 'vault')
+                type_icon = "📓" if source_type == 'vault' else "💬"
+                # Anchor for clickable citation
+                st.markdown(f'<div id="source-{source["rank"]}"></div>', unsafe_allow_html=True)
+                with st.expander(
+                    f"**{source['rank']}. {type_icon} {source['title']}** (score: {source.get('score', 0):.3f})"
+                ):
+                    file_link_html = render_file_link(source['file'], source_type)
+                    st.markdown(f'<small style="color: gray;">{file_link_html}</small>', unsafe_allow_html=True)
+                    cleaned = clean_excerpt_for_display(source.get('excerpt', ''))
+                    st.markdown(cleaned)
+
         # Display loaded history result (when user clicks a history item)
-        if st.session_state.loaded_history_result and not search_button:
+        elif st.session_state.loaded_history_result and not search_button:
             entry = st.session_state.loaded_history_result
 
             # Parse timestamp for display
@@ -757,8 +824,23 @@ def main():
                             total_sources = len(result['sources'])
                             word_count = len(result['answer'].split())
 
-                            # Save to persistent history FIRST (before display)
+                            # Save to persistent history
                             save_query_to_history(query, result)
+
+                            # Store result for potential rerun and trigger sidebar update
+                            if not st.session_state.history_updated:
+                                st.session_state.pending_result = {
+                                    'result': result,
+                                    'query': query,
+                                    'exec_time': exec_time,
+                                    'search_scope': search_scope,
+                                    'research_mode': research_mode
+                                }
+                                st.session_state.history_updated = True
+                                st.rerun()  # Rerun to update sidebar with new history
+
+                            # Reset flag for next query
+                            st.session_state.history_updated = False
 
                             # Display execution summary with history confirmation
                             st.markdown(

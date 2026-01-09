@@ -877,9 +877,17 @@ class UltraRAG:
                 storage_context=storage_context
             )
 
-            # Get nodes for BM25
-            docstore = self.conversations_index.docstore
-            self.conversations_nodes = list(docstore.docs.values())
+            # Reconstruct nodes from LanceDB (from_vector_store creates empty docstore)
+            from vector_store import reconstruct_nodes_from_lancedb
+            table_name = self.config.vector_db.conversations_table
+            self.conversations_nodes = reconstruct_nodes_from_lancedb(
+                self.config.vector_db, table_name=table_name
+            )
+
+            # Also populate the docstore for consistency
+            for node in self.conversations_nodes:
+                self.conversations_index.docstore.add_documents([node])
+
             print(f"Loaded {len(self.conversations_nodes)} conversation nodes")
 
             return True

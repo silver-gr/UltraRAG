@@ -33,28 +33,42 @@ except ImportError:
     BM25_AVAILABLE = False
 
 
-# Enhanced prompt template for federated retrieval with inline citations
-FEDERATED_TEMPLATE = """You are a personal knowledge assistant with access to both personal notes and AI conversation history.
+def _get_federated_template(source_types: List[str]) -> str:
+    """Generate appropriate prompt template based on active sources."""
+    has_vault = "vault" in source_types
+    has_conv = "conversations" in source_types
 
-Context from personal knowledge base:
----------------------
-{context_str}
----------------------
+    if has_vault and has_conv:
+        intro = "You are a personal knowledge assistant with access to both personal notes and AI conversation history."
+        note = "\nSome context may come from past AI conversations (marked with source: ai_conversation).\nTreat these as reference material that may contain useful information."
+    elif has_conv:
+        intro = "You are a knowledge assistant analyzing AI conversation history."
+        note = "\nAll context comes from past AI conversations. Extract insights and patterns from these discussions."
+    else:
+        intro = "You are a personal knowledge assistant analyzing notes from an Obsidian vault."
+        note = ""
 
-Some context may come from past AI conversations (marked with source: ai_conversation).
-Treat these as reference material that may contain useful information.
+    return f"""{intro}
+
+Context from knowledge base:
+---------------------
+{{context_str}}
+---------------------
+{note}
 
 Instructions:
-- PREMISE: What does the user already know based on their vault and past conversations?
-- TASK: What specific question or need does the user have?
-- CONSTRAINTS: Only use information from the provided context. If uncertain, acknowledge limitations.
-- FORMAT: Provide clear, well-structured answers. Use inline citations [1], [2], etc. to reference specific sources.
-- CITATIONS: When using information from a source, add the source number in brackets immediately after the statement, e.g., "Habits form through repetition [3]."
+- TASK: Answer the user's question using ONLY the provided context.
+- CONSTRAINTS: If the context doesn't contain relevant information, acknowledge this.
+- FORMAT: Provide clear, well-structured answers. DO NOT include citation numbers like [1] or [23] in your response - sources will be shown separately.
 
-Query: {query_str}
+Query: {{query_str}}
 
-Think through the relevant concepts, then provide a comprehensive answer with inline citations:
+Provide a comprehensive answer based on the context:
 """
+
+
+# Default template (backwards compatibility)
+FEDERATED_TEMPLATE = _get_federated_template(["vault", "conversations"])
 
 
 @dataclass
@@ -331,8 +345,9 @@ class FederatedQueryEngine:
                 )
             )
 
-        # Response synthesizer with federated prompt
-        qa_prompt = PromptTemplate(FEDERATED_TEMPLATE)
+        # Response synthesizer with dynamic prompt based on active sources
+        source_types = [s.source_type for s in self.active_sources]
+        qa_prompt = PromptTemplate(_get_federated_template(source_types))
         refine_prompt = PromptTemplate(REFINE_TEMPLATE)
 
         response_synthesizer = get_response_synthesizer(
