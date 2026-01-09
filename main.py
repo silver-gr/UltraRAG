@@ -945,11 +945,13 @@ class UltraRAG:
     ):
         """Query both vault and conversations with federated retrieval.
 
+        Uses numbered context for proper [1], [2], [3] citations that match displayed sources.
+
         Args:
             query_str: Query string
             source_filter: Optional list of sources ("vault", "conversations")
             return_sources: Include source information in response
-            max_sources: Maximum sources to include (None = all retrieved)
+            max_sources: Maximum sources to include (None = use rerank_top_n)
             date_filter: Date filter preset to apply
         """
         if self.federated_engine is None:
@@ -968,33 +970,88 @@ class UltraRAG:
         print("Searching vault and conversations...\n")
 
         try:
-            response = self.federated_engine.query(
+            # Step 1: Retrieve nodes (includes query transformation, reranking)
+            all_nodes = self.federated_engine.retrieve(
                 query_str,
                 source_filter=source_filter
             )
 
-            # Apply temporal filter if specified
-            source_nodes = response.source_nodes
+            # Step 2: Apply temporal filter if specified
             if date_filter != "all_time":
                 temporal_filter = create_temporal_filter(preset=date_filter)
                 if temporal_filter:
-                    source_nodes = temporal_filter._postprocess_nodes(source_nodes)
+                    all_nodes = temporal_filter._postprocess_nodes(all_nodes)
 
-            total_sources = len(source_nodes)
+            total_retrieved = len(all_nodes)
+
+            # Step 3: Limit nodes for synthesis (default to rerank_top_n if max_sources not specified)
+            synthesis_limit = max_sources if max_sources is not None else self.config.retrieval.rerank_top_n
+            nodes_for_synthesis = all_nodes[:synthesis_limit] if synthesis_limit > 0 else all_nodes
+            num_sources = len(nodes_for_synthesis)
+
+            logger.info(f"Federated synthesis: using {num_sources} of {total_retrieved} nodes")
+
+            # Step 4: Build numbered context for proper [1], [2], [3] citations
+            context_parts = []
+            for i, node in enumerate(nodes_for_synthesis, 1):
+                # Handle NodeWithScore wrapper
+                node_obj = node.node if hasattr(node, 'node') else node
+                metadata = node_obj.metadata
+                title = metadata.get('title', 'Unknown')
+                file_path = metadata.get('file_path', metadata.get('file_name', ''))
+                source_type = metadata.get('source_type', 'vault')
+                context_parts.append(
+                    f"[{i}] Source: {title}\n"
+                    f"File: {file_path} (source_type: {source_type})\n"
+                    f"Content:\n{node_obj.text}\n"
+                )
+            numbered_context = "\n---\n".join(context_parts)
+
+            # Step 5: Build synthesis prompt with dynamic template
+            from federated_query import _get_federated_template
+            source_types = list(set(
+                (node.node if hasattr(node, 'node') else node).metadata.get('source_type', 'vault')
+                for node in nodes_for_synthesis
+            ))
+            template = _get_federated_template(source_types)
+            prompt = template.replace("{context_str}", numbered_context).replace("{query_str}", query_str)
+
+            # Step 6: Call LLM directly for synthesis
+            from llama_index.core import Settings
+            response = Settings.llm.complete(prompt)
+            answer = response.text
+
+            # Step 7: Build source summary
+            source_summary = {"total_nodes": total_retrieved, "by_source": {}, "by_type": {"vault": 0, "conversations": 0}}
+            for node in nodes_for_synthesis:
+                node_obj = node.node if hasattr(node, 'node') else node
+                st = node_obj.metadata.get('source_type', 'vault')
+                if st in source_summary["by_type"]:
+                    source_summary["by_type"][st] += 1
 
             if return_sources:
-                # Include source summary
-                source_summary = response.metadata.get('source_summary', {}) if hasattr(response, 'metadata') else {}
+                # Build sources list matching synthesis nodes (citations will match)
+                sources = []
+                for i, node in enumerate(nodes_for_synthesis, 1):
+                    node_obj = node.node if hasattr(node, 'node') else node
+                    metadata = node_obj.metadata
+                    sources.append({
+                        'rank': i,
+                        'title': metadata.get('title', 'Unknown'),
+                        'file': metadata.get('file_path', metadata.get('file_name', 'Unknown')),
+                        'score': node.score if hasattr(node, 'score') else 0.0,
+                        'excerpt': node_obj.text[:300] + "..." if len(node_obj.text) > 300 else node_obj.text,
+                        'source_type': metadata.get('source_type', 'vault')
+                    })
 
                 return {
-                    'answer': str(response),
-                    'sources': self._format_sources(source_nodes, max_sources),
-                    'total_sources': total_sources,
-                    'source_summary': source_summary,
-                    'raw_response': response
+                    'answer': answer,
+                    'sources': sources,
+                    'total_sources': total_retrieved,
+                    'source_summary': source_summary
                 }
 
-            return str(response)
+            return answer
 
         except Exception as e:
             logger.error(f"Federated query failed: {e}", exc_info=True)

@@ -40,7 +40,7 @@ def _get_federated_template(source_types: List[str]) -> str:
 
     if has_vault and has_conv:
         intro = "You are a personal knowledge assistant with access to both personal notes and AI conversation history."
-        note = "\nSome context may come from past AI conversations (marked with source: ai_conversation).\nTreat these as reference material that may contain useful information."
+        note = "\nSome context may come from past AI conversations (marked with source_type: conversations).\nTreat these as reference material that may contain useful information."
     elif has_conv:
         intro = "You are a knowledge assistant analyzing AI conversation history."
         note = "\nAll context comes from past AI conversations. Extract insights and patterns from these discussions."
@@ -50,7 +50,7 @@ def _get_federated_template(source_types: List[str]) -> str:
 
     return f"""{intro}
 
-Context from knowledge base:
+Context from knowledge base (numbered for citation):
 ---------------------
 {{context_str}}
 ---------------------
@@ -59,11 +59,13 @@ Context from knowledge base:
 Instructions:
 - TASK: Answer the user's question using ONLY the provided context.
 - CONSTRAINTS: If the context doesn't contain relevant information, acknowledge this.
-- FORMAT: Provide clear, well-structured answers. DO NOT include citation numbers like [1] or [23] in your response - sources will be shown separately.
+- CITATIONS: Use inline citations [1], [2], etc. to reference the numbered sources above.
+  Example: "Habits form through repetition [3]."
+- IMPORTANT: Do NOT add a "Sources" or "References" section at the end - sources will be displayed separately by the system.
 
 Query: {{query_str}}
 
-Provide a comprehensive answer based on the context:
+Provide a comprehensive answer with inline citations:
 """
 
 
@@ -438,6 +440,33 @@ class FederatedQueryEngine:
                 summary["by_type"][source_type] += 1
 
         return summary
+
+    def retrieve(
+        self,
+        query_str: str,
+        source_filter: Optional[List[str]] = None
+    ) -> List[NodeWithScore]:
+        """Retrieve nodes without synthesis (for manual context building).
+
+        Args:
+            query_str: Query string
+            source_filter: Optional list of source names to query
+
+        Returns:
+            List of NodeWithScore objects (reranked)
+        """
+        logger.info(f"Federated retrieval (no synthesis): {query_str[:100]}...")
+
+        # If source filter changed, rebuild engine
+        if source_filter and set(source_filter) != set(s.name for s in self.active_sources):
+            logger.info(f"Rebuilding engine with source filter: {source_filter}")
+            self.active_sources = [s for s in self.sources if s.name in source_filter]
+            self.query_engine = self._build_query_engine()
+
+        # Use the retriever from the query engine
+        nodes = self.query_engine.retriever.retrieve(query_str)
+        logger.info(f"Retrieved {len(nodes)} nodes for manual synthesis")
+        return nodes
 
     def query_vault_only(self, query_str: str) -> Any:
         """Query only vault sources."""
