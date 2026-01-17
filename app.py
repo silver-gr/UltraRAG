@@ -13,8 +13,10 @@ from pathlib import Path
 from datetime import datetime
 from main import UltraRAG
 from config import load_config
-from vector_store import index_exists
+from vector_store import index_exists, delete_from_index
 from temporal_filter import get_all_presets, DateFilterPreset
+from settings_store import get_exclusions, add_exclusion, remove_exclusion
+from exclusion_matcher import ExclusionMatcher, preview_exclusions
 
 # Get Obsidian vault name from environment for clickable links
 OBSIDIAN_VAULT_NAME = os.getenv("OBSIDIAN_VAULT_NAME", "")
@@ -372,6 +374,133 @@ if AUTOLOAD_INDEX and st.session_state.rag is None:
         st.session_state.autoload_attempted = True
 
 
+@st.dialog("⚙️ Settings", width="large")
+def settings_dialog():
+    """Settings dialog for file exclusions and other configuration."""
+    config = load_config()
+    db_path = str(config.vector_db.lancedb_path)
+    vault_path = config.vault_path
+
+    st.subheader("📁 File Exclusions")
+    st.caption("Exclude files or folders from indexing using patterns")
+
+    # Pattern input section
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        pattern = st.text_input(
+            "Add exclusion pattern",
+            placeholder="Archive/** or *.excalidraw.md or ^Daily.*2023",
+            key="exclusion_pattern_input"
+        )
+    with col2:
+        pattern_type = st.selectbox(
+            "Type",
+            ["glob", "exact", "regex"],
+            key="exclusion_type_select",
+            help="glob: wildcards like *, **\nexact: exact path match\nregex: regular expression"
+        )
+
+    # Pattern help
+    with st.expander("📖 Pattern Examples"):
+        st.markdown("""
+        | Type | Pattern | Matches |
+        |------|---------|---------|
+        | glob | `Archive/**` | All files in Archive/ |
+        | glob | `*.excalidraw.md` | All Excalidraw files |
+        | glob | `**/drafts/*` | Any 'drafts' folder |
+        | exact | `Projects/old-project.md` | Specific file |
+        | regex | `^Daily.*2023` | Daily notes from 2023 |
+        """)
+
+    # Preview and Add buttons
+    col_preview, col_add = st.columns(2)
+
+    with col_preview:
+        if st.button("👁️ Preview Matches", disabled=not pattern):
+            if pattern:
+                preview = preview_exclusions(
+                    [{"pattern": pattern, "type": pattern_type}],
+                    vault_path
+                )
+                if preview["excluded_count"] > 0:
+                    st.info(f"Would exclude **{preview['excluded_count']}** of {preview['total_files']} files")
+                    # Show first 10 matches
+                    with st.expander(f"Matching files ({min(10, preview['excluded_count'])} of {preview['excluded_count']})"):
+                        for path, _ in preview["excluded_files"][:10]:
+                            st.text(f"  📄 {path}")
+                        if preview["excluded_count"] > 10:
+                            st.caption(f"... and {preview['excluded_count'] - 10} more")
+                else:
+                    st.warning("No files match this pattern")
+
+    with col_add:
+        if st.button("➕ Add Pattern", type="primary", disabled=not pattern):
+            if pattern:
+                try:
+                    # Add to settings
+                    add_exclusion(db_path, pattern, pattern_type)
+
+                    # Get files to remove from index
+                    preview = preview_exclusions(
+                        [{"pattern": pattern, "type": pattern_type}],
+                        vault_path
+                    )
+
+                    if preview["excluded_count"] > 0:
+                        # Remove from index - convert relative paths to absolute
+                        # LanceDB stores absolute paths, preview returns relative
+                        file_paths = [
+                            str(vault_path / p) for p, _ in preview["excluded_files"]
+                        ]
+                        deleted = delete_from_index(db_path, file_paths)
+                        st.success(f"✅ Added exclusion. Removed {deleted} chunks from index.")
+                    else:
+                        st.success("✅ Added exclusion pattern.")
+
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+    st.divider()
+
+    # Current exclusions list
+    st.subheader("Current Exclusions")
+    exclusions = get_exclusions(db_path)
+
+    if not exclusions:
+        st.info("No exclusion patterns configured")
+    else:
+        # Count total excluded files
+        all_patterns = [{"pattern": e["pattern"], "type": e["type"]} for e in exclusions]
+        total_preview = preview_exclusions(all_patterns, vault_path)
+        st.caption(f"💡 Total: {total_preview['excluded_count']} files excluded from indexing")
+
+        # Display each exclusion with delete button
+        for exc in exclusions:
+            col_pattern, col_type, col_delete = st.columns([4, 1, 0.5])
+
+            with col_pattern:
+                # Preview count for this specific pattern
+                single_preview = preview_exclusions(
+                    [{"pattern": exc["pattern"], "type": exc["type"]}],
+                    vault_path
+                )
+                st.text(f"📁 {exc['pattern']}")
+                st.caption(f"Matches {single_preview['excluded_count']} files")
+
+            with col_type:
+                st.caption(exc["type"])
+
+            with col_delete:
+                if st.button("🗑️", key=f"del_{exc['pattern']}_{exc['type']}", help="Remove pattern"):
+                    try:
+                        remove_exclusion(db_path, exc["pattern"], exc["type"])
+                        st.success(f"Removed: {exc['pattern']}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+
 def main():
     st.title("🧠 UltraRAG - Obsidian Knowledge Assistant")
     st.markdown("World-class RAG system for your personal knowledge base")
@@ -501,6 +630,12 @@ def main():
             else:
                 st.info("Set ENABLE_RAPTOR=true in .env")
 
+        # Settings button (shows exclusions and other configuration)
+        if st.session_state.indexed:
+            st.divider()
+            if st.button("⚙️ Settings", use_container_width=True):
+                settings_dialog()
+
         # System status (compact)
         st.divider()
         if st.session_state.rag:
@@ -626,7 +761,7 @@ def main():
             # Research mode toggle
             research_mode = st.checkbox(
                 "🔬 Research",
-                help="Enable multi-step iterative retrieval (3-5x slower, higher accuracy)",
+                help="Multi-step retrieval with gap analysis. Use @all prefix for exhaustive search (e.g., '@all list all habits')",
                 value=False
             )
         with col5:

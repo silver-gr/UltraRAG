@@ -2,6 +2,9 @@
 import logging
 from typing import List, Optional, Dict, Set
 from llama_index.core import VectorStoreIndex
+
+# LangSmith observability (opt-in, no-op if not configured)
+from observability import trace_chain, trace_retrieval, is_tracing_enabled
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.retrievers import VectorIndexRetriever, BaseRetriever
 from llama_index.core.postprocessor import SimilarityPostprocessor
@@ -116,6 +119,7 @@ Instructions:
 - CONSTRAINTS: Only use information from the provided context. If uncertain, acknowledge limitations.
 - FORMAT: Provide clear, well-structured answers. Use inline citations [1], [2], etc. to reference specific sources.
 - CITATIONS: When using information from a source, add the source number in brackets immediately after the statement, e.g., "Habits form through repetition [3]."
+- **USER OVERRIDE**: If the user specifies a format in their query (e.g., "as a table", "in Greek", "bullet points only"), follow that format instead.
 
 Query: {query_str}
 
@@ -147,12 +151,14 @@ INSTRUCTIONS FOR COMPREHENSIVE OUTPUT:
 6. **Include Details**: Capture specific examples, techniques, frameworks, quotes, and actionable items.
 7. **Cross-References**: Note connections between different sources and concepts.
 
-OUTPUT FORMAT:
+OUTPUT FORMAT (default - use unless user specifies otherwise in their query):
 - Start with a brief executive summary (2-3 sentences)
 - Then provide comprehensive coverage organized by theme/category
 - Include all specific items, techniques, frameworks, examples found
 - Use inline citations [N] throughout to attribute information to sources
 - End with connections and insights across the material
+
+**IMPORTANT**: If the user's query contains specific formatting instructions (e.g., "as a table", "in bullet points", "JSON format", "Greek language"), FOLLOW THOSE INSTRUCTIONS and override the default format above. The user's explicit request takes priority.
 
 Generate a thorough, detailed research report with inline citations. Do NOT truncate or summarize - include everything relevant:
 """
@@ -633,6 +639,7 @@ class RAGQueryEngine:
         
         return query_engine
     
+    @trace_chain
     def query(self, query_str: str, use_cache: Optional[bool] = None, **kwargs):
         """
         Execute query and return response.
@@ -883,6 +890,7 @@ class HybridQueryEngine:
 
         return query_engine
 
+    @trace_chain
     def query(self, query_str: str, use_cache: Optional[bool] = None):
         """
         Execute hybrid query with fusion.

@@ -35,6 +35,9 @@ pandas
 numpy
 tqdm
 
+# Observability (optional)
+langsmith>=0.1.0
+
 # Evaluation (optional)
 ragas>=0.1.0
 datasets>=2.14.0

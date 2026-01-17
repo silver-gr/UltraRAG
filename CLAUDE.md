@@ -113,8 +113,23 @@ research_mode.py → multi-step retrieval → gap analysis → refined queries
 ```
 - **research_mode.py**: `ResearchRetriever` performs iterative retrieval with LLM-powered gap analysis
 - Activates via `@research <query>` in CLI or 🔬 checkbox in web UI
+- **Exhaustive mode**: Use `@all <query>` prefix to force all iterations regardless of confidence (for "all/every" queries)
 - **Important:** Research mode uses its own synthesis limit (`RESEARCH_MAX_SYNTHESIS_SOURCES=0`), NOT the UI "Max sources" dropdown. This allows deep analysis while the dropdown only controls display count.
 - Config: `research_max_iterations=3`, `research_confidence_threshold=0.8`, `research_max_synthesis_sources=0` (0 = unlimited)
+
+**Dual-Model Architecture:**
+Research mode uses two different models to optimize for speed and reduce rate limiting:
+
+| Function | Model | Purpose |
+|----------|-------|---------|
+| Gap Analysis | `gemini-flash-latest` (Gemini 2.5 Flash) | Fast, lightweight analysis with AFC disabled |
+| Sub-query Generation | `gemini-3-flash-preview` | Main LLM for quality query generation |
+| Final Synthesis | `gemini-3-flash-preview` | Main LLM for comprehensive output |
+
+- Gap analysis LLM has AFC (Automatic Function Calling) disabled to prevent rate limiting
+- 5-second delay between iterations to spread API calls
+- Progressive retry on MAX_TOKENS: 100% → 80% → 66% → 300 nodes
+- See `docs/features/RESEARCH_MODE_ENHANCEMENTS.md` for full documentation
 
 ### Federated Retrieval (AI Conversations)
 ```
@@ -233,6 +248,21 @@ OBSIDIAN_VAULT_NAME=Silver Personal
 - Clicking opens the note directly in Obsidian via `obsidian://` URI scheme
 - Works for vault sources only (not AI conversation sources)
 
+## File Exclusions
+Exclude files or folders from indexing via Settings UI or programmatically:
+```bash
+# Web UI: Click "Settings" button in sidebar after loading index
+
+# Programmatic usage:
+from settings_store import add_exclusion, get_exclusions
+add_exclusion("data/lancedb", "Archive/**", "glob")  # Exclude Archive folder
+add_exclusion("data/lancedb", "*.excalidraw.md", "glob")  # Exclude Excalidraw files
+```
+- Pattern types: `glob` (wildcards), `exact` (path match), `regex`
+- Live removal: Files are removed from index immediately when pattern is added
+- Persistence: Patterns saved in LanceDB `settings` table
+- See `docs/features/FILE_EXCLUSIONS.md` for full documentation
+
 ## RAGAS Evaluation
 Run automated evaluation with RAGAS metrics:
 ```bash
@@ -246,4 +276,7 @@ python -m evaluation --dataset tests/evaluation_dataset.json
 Extended documentation is in `docs/`:
 - `docs/ARCHITECTURE.md` - System diagrams and data flow
 - `docs/EVALUATION.md` - RAGAS evaluation setup and usage
-- `docs/features/` - Feature guides (late chunking, query transformation, self-correction, graph retrieval)
+- `docs/features/` - Feature guides:
+  - `FILE_EXCLUSIONS.md` - File/folder exclusion patterns
+  - `RESEARCH_MODE_ENHANCEMENTS.md` - Exhaustive queries, dual-model architecture, progressive retry
+  - `QUERY_INTENT_CLASSIFICATION.md` - Future: LLM-based query classification

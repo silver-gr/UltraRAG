@@ -11,6 +11,9 @@ from dataclasses import dataclass
 from llama_index.core.schema import NodeWithScore, QueryBundle
 from llama_index.core.retrievers import BaseRetriever
 
+# LangSmith observability (opt-in, no-op if not configured)
+from observability import trace_chain, trace_span, is_tracing_enabled
+
 logger = logging.getLogger(__name__)
 
 
@@ -75,6 +78,29 @@ class ResearchRetriever:
     6. Synthesizes final answer from all retrieved content
     """
 
+    # Patterns that indicate exhaustive/comprehensive retrieval is needed
+    EXHAUSTIVE_PATTERNS = [
+        r'\ball\b',                    # "all habits", "list all"
+        r'\bevery\b',                  # "every routine"
+        r'\bcomplete\s+list\b',        # "complete list of"
+        r'\bcomprehensive\b',          # "comprehensive overview"
+        r'\bexhaustive\b',             # "exhaustive list"
+        r'\bentire\b',                 # "entire collection"
+        r'\bfull\s+list\b',            # "full list"
+        r'\bόλα\b|\bόλες\b|\bόλους\b', # Greek: all (neuter/feminine/masculine)
+        r'\bκάθε\b',                   # Greek: every
+        r'\bπλήρης?\b',                # Greek: complete/full
+    ]
+
+    # Maximum iterations for exhaustive queries (overrides config)
+    EXHAUSTIVE_MAX_ITERATIONS = 5
+
+    # Delay between iterations to avoid rate limiting (seconds)
+    ITERATION_DELAY = 5
+
+    # Lightweight model for gap analysis (faster, less rate limiting)
+    GAP_ANALYSIS_MODEL = "gemini-flash-latest"
+
     def __init__(
         self,
         base_retriever: BaseRetriever,
@@ -101,22 +127,86 @@ class ResearchRetriever:
         self.max_subqueries = max_subqueries
         self.enable_research = enable_research
 
+        # Create lightweight LLM for gap analysis (reduces rate limiting)
+        self.gap_analysis_llm = self._create_gap_analysis_llm()
+
         logger.info(
             f"ResearchRetriever initialized "
             f"(max_iterations={max_iterations}, "
             f"confidence_threshold={confidence_threshold}, "
-            f"enabled={enable_research})"
+            f"enabled={enable_research}, "
+            f"gap_analysis_model={self.GAP_ANALYSIS_MODEL})"
         )
 
-    def research(self, query: str) -> ResearchResult:
+    def _create_gap_analysis_llm(self):
+        """Create a lightweight LLM specifically for gap analysis.
+
+        Uses a faster model with AFC disabled to reduce rate limiting.
+        """
+        try:
+            import os
+            from llama_index.llms.google_genai import GoogleGenAI
+
+            api_key = os.getenv("GOOGLE_API_KEY")
+            if not api_key:
+                logger.warning("No GOOGLE_API_KEY found, falling back to main LLM for gap analysis")
+                return self.llm
+
+            # Create lightweight LLM with AFC disabled
+            gap_llm = GoogleGenAI(
+                model=self.GAP_ANALYSIS_MODEL,
+                api_key=api_key,
+                temperature=0.1,
+                max_tokens=1024,  # Gap analysis only needs short responses
+                is_function_calling_model=False,  # Disable AFC
+            )
+            logger.info(f"Created gap analysis LLM: {self.GAP_ANALYSIS_MODEL} (AFC disabled)")
+            return gap_llm
+        except Exception as e:
+            logger.warning(f"Failed to create gap analysis LLM: {e}, falling back to main LLM")
+            return self.llm
+
+    def _is_exhaustive_query(self, query: str) -> bool:
+        """Detect if query requests exhaustive/comprehensive results.
+
+        Args:
+            query: User query string
+
+        Returns:
+            True if query contains patterns indicating exhaustive retrieval needed
+        """
+        query_lower = query.lower()
+        for pattern in self.EXHAUSTIVE_PATTERNS:
+            if re.search(pattern, query_lower):
+                logger.info(f"Detected exhaustive query pattern: {pattern}")
+                return True
+        return False
+
+    @trace_chain
+    def research(self, query: str, force_exhaustive: bool = False) -> ResearchResult:
         """Execute multi-step research process.
 
         Args:
             query: Original user query
+            force_exhaustive: If True, run all iterations regardless of confidence
+                              (also triggered by @all prefix or exhaustive query patterns)
 
         Returns:
             ResearchResult with aggregated nodes and iteration details
         """
+        # Detect if this is an exhaustive query (auto-detect or forced)
+        is_exhaustive = force_exhaustive or self._is_exhaustive_query(query)
+
+        # Determine effective max iterations
+        effective_max_iterations = self.max_iterations
+        if is_exhaustive:
+            effective_max_iterations = self.EXHAUSTIVE_MAX_ITERATIONS
+            logger.info(
+                f"Exhaustive mode enabled: force={force_exhaustive}, "
+                f"auto_detect={self._is_exhaustive_query(query)}, "
+                f"max_iterations={effective_max_iterations}"
+            )
+
         if not self.enable_research:
             logger.info("Research mode disabled, using base retrieval")
             query_bundle = QueryBundle(query_str=query)
@@ -139,7 +229,7 @@ class ResearchRetriever:
                 final_confidence=1.0
             )
 
-        logger.info(f"Starting research mode for query: {query[:100]}...")
+        logger.info(f"Starting research mode for query: {query}")
 
         # Track all iterations
         iterations: List[ResearchIteration] = []
@@ -152,8 +242,14 @@ class ResearchRetriever:
 
         current_query = query
 
-        for iteration_num in range(1, self.max_iterations + 1):
-            logger.info(f"Research iteration {iteration_num}/{self.max_iterations}")
+        for iteration_num in range(1, effective_max_iterations + 1):
+            # Add delay between iterations to avoid rate limiting (skip first iteration)
+            if iteration_num > 1 and self.ITERATION_DELAY > 0:
+                import time
+                logger.info(f"Waiting {self.ITERATION_DELAY}s before iteration {iteration_num} to avoid rate limiting...")
+                time.sleep(self.ITERATION_DELAY)
+
+            logger.info(f"Research iteration {iteration_num}/{effective_max_iterations}")
 
             # Retrieve with current query
             query_bundle = QueryBundle(query_str=current_query)
@@ -181,15 +277,17 @@ class ResearchRetriever:
                     retrieved_paths.add(file_path)
 
             # Analyze gaps and compute confidence
-            gaps, confidence = self._analyze_gaps(query, list(all_nodes.values()))
+            gaps, confidence = self._analyze_gaps(
+                query, list(all_nodes.values()), is_exhaustive=is_exhaustive
+            )
 
             logger.info(
                 f"Iteration {iteration_num}: Confidence={confidence:.2f}, "
-                f"Total unique nodes={len(all_nodes)}"
+                f"Total unique nodes={len(all_nodes)}, exhaustive={is_exhaustive}"
             )
 
             if gaps:
-                logger.debug(f"Identified gaps: {gaps[:200]}...")
+                logger.info(f"Identified gaps: {gaps}")
 
             # Store iteration result
             iteration_result = ResearchIteration(
@@ -201,22 +299,30 @@ class ResearchRetriever:
             )
             iterations.append(iteration_result)
 
-            # Check if we should stop
-            if confidence >= self.confidence_threshold:
+            # Check if we should stop (skip early stopping for exhaustive queries)
+            if confidence >= self.confidence_threshold and not is_exhaustive:
                 logger.info(
                     f"Confidence threshold reached ({confidence:.2f} >= {self.confidence_threshold}), "
                     f"stopping research"
                 )
                 break
+            elif confidence >= self.confidence_threshold and is_exhaustive:
+                logger.info(
+                    f"Confidence threshold reached but exhaustive mode - continuing "
+                    f"(iteration {iteration_num}/{effective_max_iterations})"
+                )
 
             # Check if we have more iterations available
-            if iteration_num >= self.max_iterations:
-                logger.info(f"Maximum iterations reached ({self.max_iterations})")
+            if iteration_num >= effective_max_iterations:
+                logger.info(f"Maximum iterations reached ({effective_max_iterations})")
                 break
 
             # Generate sub-queries for next iteration
-            if gaps:
-                subqueries = self._generate_subqueries(query, gaps, retrieved_paths)
+            # For exhaustive queries, always generate sub-queries even if no explicit gaps
+            if gaps or is_exhaustive:
+                subqueries = self._generate_subqueries(
+                    query, gaps or "Find more related content", retrieved_paths
+                )
 
                 if not subqueries:
                     logger.info("No sub-queries generated, stopping research")
@@ -225,7 +331,7 @@ class ResearchRetriever:
                 # Use first sub-query for next iteration
                 # (in a more advanced implementation, could retrieve in parallel)
                 current_query = subqueries[0]
-                logger.info(f"Next iteration query: {current_query[:100]}...")
+                logger.info(f"Next iteration query: {current_query}")
             else:
                 logger.info("No gaps identified, stopping research")
                 break
@@ -258,13 +364,15 @@ class ResearchRetriever:
     def _analyze_gaps(
         self,
         query: str,
-        nodes: List[NodeWithScore]
+        nodes: List[NodeWithScore],
+        is_exhaustive: bool = False
     ) -> tuple[Optional[str], float]:
         """Analyze gaps in retrieved content using LLM.
 
         Args:
             query: Original query
             nodes: Currently retrieved nodes
+            is_exhaustive: If True, use stricter gap analysis for comprehensive queries
 
         Returns:
             Tuple of (gaps description, confidence score 0-1)
@@ -283,8 +391,20 @@ class ResearchRetriever:
 
         context = "\n\n".join(context_chunks)
 
-        prompt = f"""Analyze whether the retrieved information fully answers the user's query.
+        # Add special instructions for exhaustive queries
+        exhaustive_note = ""
+        if is_exhaustive:
+            exhaustive_note = """
+IMPORTANT: This is an EXHAUSTIVE query - the user wants ALL/EVERY matching item.
+- Do NOT report high confidence unless you are CERTAIN all relevant items have been found
+- For exhaustive queries like "list all X" or "every Y", prefer reporting GAPS over premature confidence
+- Consider: Are there likely more items in different folders, with different names, or phrased differently?
+- Only report 0.9+ confidence if you see clear evidence this is a complete list
 
+"""
+
+        prompt = f"""Analyze whether the retrieved information fully answers the user's query.
+{exhaustive_note}
 Query: {query}
 
 Retrieved Information (top 10 chunks from knowledge base):
@@ -306,8 +426,12 @@ Guidelines:
 - <0.5 = Insufficient or irrelevant information"""
 
         try:
-            result = self.llm.complete(prompt).text.strip()
-            logger.info(f"Gap analysis LLM response: {result[:300]}...")
+            import time
+            start_time = time.time()
+            result = self.gap_analysis_llm.complete(prompt).text.strip()
+            elapsed = time.time() - start_time
+            logger.info(f"Gap analysis LLM call took {elapsed:.1f}s (model: {self.GAP_ANALYSIS_MODEL})")
+            logger.info(f"Gap analysis LLM response:\n{result}")
 
             # Parse confidence score with robust regex matching
             confidence = 0.5  # Default
@@ -344,8 +468,8 @@ Guidelines:
                 if match:
                     gaps_str = match.group(1).strip()
                     if gaps_str.lower() not in ['none', 'no gaps', 'n/a', 'none.', 'no gaps.']:
-                        gaps = gaps_str[:500]  # Limit length
-                        logger.info(f"Parsed gaps: {gaps[:100]}...")
+                        gaps = gaps_str  # Full gaps text
+                        logger.info(f"Parsed gaps: {gaps}")
                     break
 
             if confidence == 0.5:
@@ -398,8 +522,12 @@ Respond with one query per line, numbered:
 3. <third query>"""
 
         try:
+            import time
+            start_time = time.time()
             result = self.llm.complete(prompt).text.strip()
-            logger.debug(f"Sub-query generation result: {result[:200]}...")
+            elapsed = time.time() - start_time
+            logger.info(f"Sub-query generation LLM call took {elapsed:.1f}s (main LLM)")
+            logger.info(f"Sub-query generation result:\n{result}")
 
             # Parse queries
             subqueries = []
@@ -417,7 +545,7 @@ Respond with one query per line, numbered:
                 if len(subqueries) >= self.max_subqueries:
                     break
 
-            logger.info(f"Generated {len(subqueries)} sub-queries")
+            logger.info(f"Generated {len(subqueries)} sub-queries: {subqueries}")
             return subqueries
 
         except Exception as e:

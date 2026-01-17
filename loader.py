@@ -108,8 +108,21 @@ class ObsidianLoader:
             logger.error(f"Error loading {note_path}: {e}", exc_info=True)
             return None
     
-    def load_vault(self, extensions: List[str] = ['.md']) -> List[ObsidianNote]:
-        """Load all notes from the vault."""
+    def load_vault(
+        self,
+        extensions: List[str] = ['.md'],
+        exclusion_patterns: List[Dict] = None
+    ) -> List[ObsidianNote]:
+        """Load all notes from the vault.
+
+        Args:
+            extensions: File extensions to include (default: ['.md'])
+            exclusion_patterns: Optional list of exclusion pattern dicts:
+                [{"pattern": "...", "type": "exact|glob|regex"}, ...]
+
+        Returns:
+            List of loaded ObsidianNote objects
+        """
         logger.info(f"Loading vault from: {self.vault_path}")
         notes = []
 
@@ -133,7 +146,21 @@ class ObsidianLoader:
             for ext in extensions:
                 markdown_files.extend(self.vault_path.rglob(f'*{ext}'))
 
-            logger.info(f"Found {len(markdown_files)} notes in vault")
+            total_files = len(markdown_files)
+            logger.info(f"Found {total_files} notes in vault")
+
+            # Apply exclusion patterns if configured
+            if exclusion_patterns:
+                from exclusion_matcher import ExclusionMatcher
+                matcher = ExclusionMatcher(exclusion_patterns)
+                markdown_files, excluded_count = matcher.filter_files(
+                    markdown_files, self.vault_path
+                )
+                if excluded_count > 0:
+                    logger.info(
+                        f"Excluded {excluded_count} of {total_files} files "
+                        f"({len(markdown_files)} remaining)"
+                    )
 
             for note_path in tqdm(markdown_files, desc="Loading notes"):
                 note = self.load_note(note_path)

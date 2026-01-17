@@ -238,6 +238,19 @@ class UltraRAG:
             print(f"Warning: Could not initialize query transformer: {e}")
             self.query_transformer = None
 
+    def _get_exclusion_patterns(self) -> list[dict]:
+        """Get file exclusion patterns from settings.
+
+        Returns:
+            List of exclusion pattern dicts, or empty list if none configured
+        """
+        try:
+            from settings_store import get_exclusions
+            return get_exclusions(str(self.config.vector_db.lancedb_path))
+        except Exception as e:
+            logger.warning(f"Could not load exclusion patterns: {e}")
+            return []
+
     def _get_checkpoint_file(self) -> Path:
         """Get path to checkpoint file.
 
@@ -331,9 +344,10 @@ class UltraRAG:
                     print("BM25 will not be available for this session")
                     self.nodes = None
 
-            # Load wikilink graph if available
+            # Load wikilink graph if available (respecting exclusions)
             try:
-                notes = self.loader.load_vault()
+                exclusion_patterns = self._get_exclusion_patterns()
+                notes = self.loader.load_vault(exclusion_patterns=exclusion_patterns)
                 self.wikilink_graph = self.loader.build_wikilink_graph(notes)
                 print(f"Wikilink graph loaded with {len(self.wikilink_graph)} nodes")
             except Exception as e:
@@ -438,6 +452,18 @@ class UltraRAG:
         note_paths = list(self.config.vault_path.rglob("*.md"))
         logger.info(f"Found {len(note_paths)} notes to index")
         print(f"Found {len(note_paths)} notes total")
+
+        # Apply exclusion patterns if configured
+        exclusion_patterns = self._get_exclusion_patterns()
+        if exclusion_patterns:
+            from exclusion_matcher import ExclusionMatcher
+            matcher = ExclusionMatcher(exclusion_patterns)
+            note_paths, excluded_count = matcher.filter_files(
+                note_paths, self.config.vault_path
+            )
+            if excluded_count > 0:
+                print(f"Excluded {excluded_count} files (based on settings)")
+                print(f"Remaining: {len(note_paths)} notes")
 
         # Filter out already processed files
         if processed_files:
@@ -545,8 +571,8 @@ class UltraRAG:
 
         # Build wikilink graph for future use
         print("\nBuilding wikilink graph...")
-        # Load all notes for graph building
-        all_notes = self.loader.load_vault()
+        # Load all notes for graph building (respecting exclusions)
+        all_notes = self.loader.load_vault(exclusion_patterns=exclusion_patterns)
         self.wikilink_graph = self.loader.build_wikilink_graph(all_notes)
         print(f"Graph contains {len(self.wikilink_graph)} nodes")
 
@@ -1077,23 +1103,37 @@ class UltraRAG:
             date_filter=date_filter
         )
 
-    def query_research(self, query_str: str, return_sources: bool = True, max_sources: int = None, date_filter: DateFilterPreset = "all_time"):
+    def query_research(
+        self,
+        query_str: str,
+        return_sources: bool = True,
+        max_sources: int = None,
+        date_filter: DateFilterPreset = "all_time",
+        force_exhaustive: bool = False
+    ):
         """Execute multi-step research mode for complex queries.
 
         Research mode performs iterative retrieval with gap analysis and query refinement.
         This is 3-5x slower but provides 141% accuracy improvement (based on Khoj benchmarks).
 
         Args:
-            query_str: User query
+            query_str: User query (supports @all prefix for exhaustive search)
             return_sources: Whether to return source nodes (default: True)
             max_sources: Maximum sources to include in response (None = all)
             date_filter: Date filter preset to apply
+            force_exhaustive: Force all iterations regardless of confidence threshold
 
         Returns:
             Dictionary with answer, sources, and research summary
         """
         if not self.query_engine:
             raise RuntimeError("Query engine not initialized. Please run index_vault() or load_existing_index() first.")
+
+        # Parse @all prefix for exhaustive search
+        if query_str.startswith("@all "):
+            force_exhaustive = True
+            query_str = query_str[5:].strip()
+            logger.info("Exhaustive mode enabled via @all prefix")
 
         logger.info(f"Research mode query: {query_str[:100]}...")
         if date_filter != "all_time":
@@ -1133,8 +1173,10 @@ class UltraRAG:
                 enable_research=self.config.retrieval.enable_research_mode
             )
 
-            # Execute research
-            research_result = research_retriever.research(query_str)
+            # Execute research (pass exhaustive flag)
+            research_result = research_retriever.research(
+                query_str, force_exhaustive=force_exhaustive
+            )
 
             logger.info(
                 f"Research completed: {research_result.total_iterations} iterations, "
@@ -1155,34 +1197,78 @@ class UltraRAG:
 
             # Research mode uses ALL sources for synthesis (0 = unlimited, default)
             # UI dropdown only controls display count, not synthesis depth
-            total_retrieved = len(all_retrieved)
+            total_retrieved = len(all_retrieved)  # Original count for reporting
             synthesis_limit = self.config.retrieval.research_max_synthesis_sources
-            # 0 means unlimited - use all retrieved nodes
-            nodes_for_synthesis = all_retrieved[:synthesis_limit] if synthesis_limit > 0 else all_retrieved
-            num_sources = len(nodes_for_synthesis)
 
-            logger.info(f"Research synthesis: using {num_sources} of {total_retrieved} nodes for output")
+            # Apply user-configured limit if set, otherwise use all
+            nodes_for_retry = all_retrieved
+            if synthesis_limit > 0:
+                nodes_for_retry = all_retrieved[:synthesis_limit]
 
-            # Build numbered context manually for proper [1], [2], [3] citations
-            context_parts = []
-            for i, node in enumerate(nodes_for_synthesis, 1):
-                title = node.metadata.get('title', 'Unknown')
-                file_path = node.metadata.get('file_path', '')
-                source_type = node.metadata.get('source_type', 'vault')
-                context_parts.append(
-                    f"[{i}] Source: {title}\n"
-                    f"File: {file_path} ({source_type})\n"
-                    f"Content:\n{node.node.text}\n"
-                )
-            numbered_context = "\n---\n".join(context_parts)
+            # Progressive retry strategy for MAX_TOKENS errors
+            # Try: 100% → 80% → 66% → 300 (hard floor)
+            HARD_FLOOR = 300
+            retry_percentages = [1.0, 0.8, 0.66]  # 100%, 80%, 66%
+            available_nodes = len(nodes_for_retry)
 
-            # Format template with source count and numbered context
-            research_prompt = RESEARCH_TEMPLATE.replace("{num_sources}", str(num_sources))
-            research_prompt = research_prompt.replace("{context_str}", numbered_context)
-            research_prompt = research_prompt.replace("{query_str}", query_str)
+            # Build attempt limits: percentages first, then hard floor
+            attempt_limits = []
+            for pct in retry_percentages:
+                limit = int(available_nodes * pct)
+                # Only add if above hard floor and not duplicate
+                if limit > HARD_FLOOR and limit not in attempt_limits:
+                    attempt_limits.append(limit)
+            # Always end with hard floor (or total if smaller)
+            attempt_limits.append(min(available_nodes, HARD_FLOOR))
 
-            # Use LLM directly for better control over context
-            response = Settings.llm.complete(research_prompt)
+            # Remove duplicates and sort descending
+            attempt_limits = sorted(set(attempt_limits), reverse=True)
+
+            logger.info(f"Research synthesis: {total_retrieved} retrieved, {available_nodes} for synthesis, retry limits: {attempt_limits}")
+
+            # Try synthesis with progressive node limits
+            response = None
+            nodes_for_synthesis = None
+
+            for attempt_num, node_limit in enumerate(attempt_limits, 1):
+                nodes_for_synthesis = nodes_for_retry[:node_limit]
+                num_sources = len(nodes_for_synthesis)
+
+                logger.info(f"Synthesis attempt {attempt_num}/{len(attempt_limits)}: using {num_sources} nodes")
+
+                # Build numbered context manually for proper [1], [2], [3] citations
+                context_parts = []
+                for i, node in enumerate(nodes_for_synthesis, 1):
+                    title = node.metadata.get('title', 'Unknown')
+                    file_path = node.metadata.get('file_path', '')
+                    source_type = node.metadata.get('source_type', 'vault')
+                    context_parts.append(
+                        f"[{i}] Source: {title}\n"
+                        f"File: {file_path} ({source_type})\n"
+                        f"Content:\n{node.node.text}\n"
+                    )
+                numbered_context = "\n---\n".join(context_parts)
+
+                # Format template with source count and numbered context
+                research_prompt = RESEARCH_TEMPLATE.replace("{num_sources}", str(num_sources))
+                research_prompt = research_prompt.replace("{context_str}", numbered_context)
+                research_prompt = research_prompt.replace("{query_str}", query_str)
+
+                try:
+                    # Use LLM directly for better control over context
+                    response = Settings.llm.complete(research_prompt)
+                    logger.info(f"Synthesis succeeded on attempt {attempt_num} with {num_sources} nodes")
+                    break  # Success!
+                except RuntimeError as e:
+                    if "MAX_TOKENS" in str(e):
+                        logger.warning(
+                            f"Synthesis attempt {attempt_num} hit MAX_TOKENS with {num_sources} nodes. "
+                            f"{'Retrying with fewer nodes...' if attempt_num < len(attempt_limits) else 'No more retries.'}"
+                        )
+                        if attempt_num >= len(attempt_limits):
+                            raise  # Re-raise on final attempt
+                        continue
+                    raise  # Re-raise non-MAX_TOKENS errors
 
             # Format result (complete() returns CompletionResponse with .text attribute)
             result = {
@@ -1304,9 +1390,10 @@ class UltraRAG:
                     return
                 print("Failed to load. Will create new index...")
 
-        # Load documents from vault
+        # Load documents from vault (respecting exclusions)
         print(f"\nLoading documents from: {self.config.vault_path}")
-        notes = self.loader.load_vault()
+        exclusion_patterns = self._get_exclusion_patterns()
+        notes = self.loader.load_vault(exclusion_patterns=exclusion_patterns)
 
         if not notes:
             print("No notes found in vault!")

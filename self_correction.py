@@ -6,6 +6,9 @@ from typing import List, Tuple, Optional
 from llama_index.core.schema import NodeWithScore, QueryBundle
 from llama_index.core.retrievers import BaseRetriever
 
+# LangSmith observability (opt-in, no-op if not configured)
+from observability import trace_chain, trace_tool, is_tracing_enabled
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +59,7 @@ class SelfCorrectingRetriever(BaseRetriever):
             f"(max_retries={max_retries}, enabled={enable_correction})"
         )
 
+    @trace_tool
     def grade_relevance(
         self,
         query: str,
@@ -159,6 +163,7 @@ Respond with ONLY the new query text, nothing else:"""
             # On error, return original query
             return original_query
 
+    @trace_chain
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         """
         Retrieve with self-correction loop.

@@ -355,3 +355,50 @@ def load_vector_index(
             f"Failed to load vector index: {e}. "
             "The index may not exist yet - try running indexing first."
         ) from e
+
+
+def delete_from_index(
+    db_path: str | Path,
+    file_paths: list[str],
+    table_name: str = "obsidian_embeddings"
+) -> int:
+    """Delete specific files from the vector index.
+
+    Args:
+        db_path: Path to LanceDB database
+        file_paths: List of relative file paths to delete
+        table_name: Name of the LanceDB table
+
+    Returns:
+        Number of rows deleted
+    """
+    import lancedb
+
+    db = lancedb.connect(str(db_path))
+
+    if table_name not in db.table_names():
+        logger.warning(f"Table '{table_name}' not found")
+        return 0
+
+    table = db.open_table(table_name)
+    initial_count = table.count_rows()
+
+    deleted = 0
+    for path in file_paths:
+        try:
+            # LanceDB stores file_path in metadata as JSON
+            # The filter needs to check metadata->file_path
+            table.delete(f"metadata.file_path = '{path}'")
+            deleted += 1
+        except Exception as e:
+            logger.warning(f"Failed to delete '{path}': {e}")
+
+    final_count = table.count_rows()
+    actual_deleted = initial_count - final_count
+
+    logger.info(f"Deleted {actual_deleted} rows for {deleted} files from {table_name}")
+
+    # Invalidate cache since index changed
+    invalidate_cache()
+
+    return actual_deleted

@@ -62,6 +62,7 @@ Instructions:
 - CITATIONS: Use inline citations [1], [2], etc. to reference the numbered sources above.
   Example: "Habits form through repetition [3]."
 - IMPORTANT: Do NOT add a "Sources" or "References" section at the end - sources will be displayed separately by the system.
+- **USER OVERRIDE**: If the user specifies a format in their query (e.g., "as a table", "in Greek", "bullet points"), follow that format instead of the default.
 
 Query: {{query_str}}
 
