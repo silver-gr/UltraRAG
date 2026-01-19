@@ -14,6 +14,7 @@ from typing import Optional, List, Set
 from llama_index.core import Settings
 from llama_index.llms.google_genai import GoogleGenAI
 from gemini_cli import GeminiCLI
+from tracked_llm import wrap_llm_with_tracking
 from tqdm import tqdm
 
 from config import load_config, RAGConfig
@@ -121,12 +122,13 @@ class UltraRAG:
         try:
             if backend == "cli":
                 # Use Gemini CLI for separate free tier quota (1000/day)
+                # No token tracking needed - CLI quota is free
                 self.llm = GeminiCLI(
                     model=self.config.llm.model,
                     temperature=self.config.llm.temperature,
                     max_tokens=self.config.llm.max_tokens
                 )
-                logger.info("Using Gemini CLI backend (free tier: 1000 requests/day)")
+                logger.info("Using Gemini CLI backend (free tier: 1000 requests/day, no cost tracking)")
             else:
                 # Use Google Gemini API directly
                 google_key = self.config.google_api_key.get_secret_value()
@@ -137,12 +139,16 @@ class UltraRAG:
                         "Get your API key from: https://makersuite.google.com/app/apikey"
                     )
 
-                self.llm = GoogleGenAI(
+                base_llm = GoogleGenAI(
                     model=self.config.llm.model,
                     api_key=google_key,
                     temperature=self.config.llm.temperature,
                     max_tokens=self.config.llm.max_tokens
                 )
+
+                # Wrap with token tracking (only for paid API)
+                self.llm = wrap_llm_with_tracking(base_llm, model_name=self.config.llm.model)
+                logger.info(f"LLM token tracking enabled for {self.config.llm.model}")
 
             Settings.llm = self.llm
             logger.debug("LLM setup completed successfully")

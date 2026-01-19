@@ -17,6 +17,7 @@ from vector_store import index_exists, delete_from_index
 from temporal_filter import get_all_presets, DateFilterPreset
 from settings_store import get_exclusions, add_exclusion, remove_exclusion
 from exclusion_matcher import ExclusionMatcher, preview_exclusions
+from llm_token_tracker import get_llm_tracker
 
 # Get Obsidian vault name from environment for clickable links
 OBSIDIAN_VAULT_NAME = os.getenv("OBSIDIAN_VAULT_NAME", "")
@@ -501,6 +502,85 @@ def settings_dialog():
                         st.error(f"Error: {e}")
 
 
+@st.dialog("LLM Token Usage & Costs", width="large")
+def llm_usage_dialog():
+    """Dialog showing daily LLM token usage and costs."""
+    tracker = get_llm_tracker()
+    stats = tracker.get_total_stats()
+    daily_data = tracker.get_usage_table(limit=30)
+
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Tokens", f"{stats['total_tokens']:,}")
+    with col2:
+        st.metric("Total Cost", f"${stats['total_cost']:.4f}")
+    with col3:
+        st.metric("Requests", f"{stats['total_requests']:,}")
+    with col4:
+        st.metric("Days Tracked", stats['days_tracked'])
+
+    st.divider()
+
+    # Daily breakdown table
+    st.subheader("Daily Breakdown")
+
+    if daily_data:
+        import pandas as pd
+        df = pd.DataFrame(daily_data)
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Date": st.column_config.TextColumn("Date", width="small"),
+                "Input Tokens": st.column_config.TextColumn("Input Tokens", width="small"),
+                "Output Tokens": st.column_config.TextColumn("Output Tokens", width="small"),
+                "Total Tokens": st.column_config.TextColumn("Total Tokens", width="small"),
+                "Requests": st.column_config.NumberColumn("Requests", width="small"),
+                "Input Cost": st.column_config.TextColumn("Input $", width="small"),
+                "Output Cost": st.column_config.TextColumn("Output $", width="small"),
+                "Total Cost": st.column_config.TextColumn("Total $", width="small"),
+            }
+        )
+    else:
+        st.info("No usage data recorded yet. Token tracking starts when you make queries.")
+
+    # Pricing info
+    with st.expander("Gemini Pricing Reference"):
+        st.markdown("""
+        | Model | Input ($/1M tokens) | Output ($/1M tokens) |
+        |-------|---------------------|----------------------|
+        | gemini-3-flash-preview | $0.50 | $3.00 |
+        | gemini-3-pro-preview | $2.00 | $12.00 |
+        | gemini-2.5-flash | $0.30 | $2.50 |
+        | gemini-flash-latest | $0.30 | $2.50 |
+
+        *Note: Token counts are estimated when actual counts are unavailable.*
+        """)
+
+    # Reset button (with confirmation)
+    st.divider()
+    col_reset, col_spacer = st.columns([1, 3])
+    with col_reset:
+        if st.button("Reset Usage Data", type="secondary"):
+            st.session_state.confirm_reset_llm_usage = True
+
+    if st.session_state.get("confirm_reset_llm_usage", False):
+        st.warning("Are you sure? This will delete all usage history.")
+        col_yes, col_no = st.columns(2)
+        with col_yes:
+            if st.button("Yes, Reset", type="primary"):
+                tracker.reset_usage(confirm=True)
+                st.session_state.confirm_reset_llm_usage = False
+                st.success("Usage data reset!")
+                st.rerun()
+        with col_no:
+            if st.button("Cancel"):
+                st.session_state.confirm_reset_llm_usage = False
+                st.rerun()
+
+
 def main():
     st.title("🧠 UltraRAG - Obsidian Knowledge Assistant")
     st.markdown("World-class RAG system for your personal knowledge base")
@@ -633,8 +713,13 @@ def main():
         # Settings button (shows exclusions and other configuration)
         if st.session_state.indexed:
             st.divider()
-            if st.button("⚙️ Settings", use_container_width=True):
-                settings_dialog()
+            col_settings, col_usage = st.columns(2)
+            with col_settings:
+                if st.button("⚙️ Settings", use_container_width=True):
+                    settings_dialog()
+            with col_usage:
+                if st.button("💰 LLM Costs", use_container_width=True):
+                    llm_usage_dialog()
 
         # System status (compact)
         st.divider()

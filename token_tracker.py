@@ -43,7 +43,8 @@ class VoyageTokenTracker:
     Persists usage to disk so limits are maintained across sessions.
     Thread-safe for concurrent access.
     """
-    storage_path: Path = field(default_factory=lambda: Path("./data/voyage_usage.json"))
+    # Shared storage with UnifiedSaved
+    storage_path: Path = field(default_factory=lambda: Path.home() / "Projects/shared-data/usage/voyage_usage.json")
     embedding_limit: int = 200_000_000  # 200M tokens
     rerank_limit: int = 200_000_000     # 200M tokens
     warn_threshold: float = 0.9         # Warn at 90% usage
@@ -286,7 +287,7 @@ def get_tracker(
 
     if _tracker is None:
         _tracker = VoyageTokenTracker(
-            storage_path=storage_path or Path("./data/voyage_usage.json"),
+            storage_path=storage_path or Path.home() / "Projects/shared-data/usage/voyage_usage.json",
             embedding_limit=embedding_limit,
             rerank_limit=rerank_limit
         )

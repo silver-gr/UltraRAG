@@ -146,6 +146,7 @@ class ResearchRetriever:
         try:
             import os
             from llama_index.llms.google_genai import GoogleGenAI
+            from tracked_llm import wrap_llm_with_tracking
 
             api_key = os.getenv("GOOGLE_API_KEY")
             if not api_key:
@@ -153,14 +154,16 @@ class ResearchRetriever:
                 return self.llm
 
             # Create lightweight LLM with AFC disabled
-            gap_llm = GoogleGenAI(
+            base_llm = GoogleGenAI(
                 model=self.GAP_ANALYSIS_MODEL,
                 api_key=api_key,
                 temperature=0.1,
                 max_tokens=1024,  # Gap analysis only needs short responses
                 is_function_calling_model=False,  # Disable AFC
             )
-            logger.info(f"Created gap analysis LLM: {self.GAP_ANALYSIS_MODEL} (AFC disabled)")
+            # Wrap with token tracking
+            gap_llm = wrap_llm_with_tracking(base_llm, model_name=self.GAP_ANALYSIS_MODEL)
+            logger.info(f"Created gap analysis LLM: {self.GAP_ANALYSIS_MODEL} (AFC disabled, tracking enabled)")
             return gap_llm
         except Exception as e:
             logger.warning(f"Failed to create gap analysis LLM: {e}, falling back to main LLM")

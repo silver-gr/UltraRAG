@@ -35,7 +35,7 @@ def main():
     args = parser.parse_args()
 
     tracker = get_tracker(
-        storage_path=Path("./data/voyage_usage.json"),
+        storage_path=Path.home() / "Projects/shared-data/usage/voyage_usage.json",
         embedding_limit=args.embedding_limit,
         rerank_limit=args.rerank_limit
     )

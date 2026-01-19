@@ -153,8 +153,17 @@ raptor_index.py → recursive clustering → LLM summarization → tree traversa
 
 ## Key Patterns
 
-### Token Tracking
+### Token Tracking (Voyage AI)
 `token_tracker.py` wraps Voyage API calls to track embedding/reranking token usage against quotas. Check `data/voyage_usage.json` for current usage.
+
+### LLM Token & Cost Tracking (Gemini)
+`llm_token_tracker.py` tracks all Gemini LLM calls with per-day cost aggregation.
+- **Storage**: `data/llm_usage.json`
+- **Pricing**: gemini-3-flash-preview ($0.50/$3.00 per 1M tokens), gemini-3-pro-preview ($2.00/$12.00)
+- **UI**: Click "LLM Costs" button in sidebar to view daily breakdown table
+- **API**: `from llm_token_tracker import get_llm_tracker; tracker.get_total_stats()`
+
+The `TrackedLLM` wrapper (`tracked_llm.py`) automatically intercepts all LLM calls and records token usage.
 
 ### LanceDB Schema Stability
 `loader.py` uses a fixed schema with `extra_metadata` JSON field to prevent schema mismatch errors across document batches with varying frontmatter.
@@ -179,7 +188,8 @@ pytest -m unit            # Unit tests only
 - `data/lancedb/` - Vector index (tables: `vectors` for vault, `conversations` for AI chats)
 - `data/raptor/` - RAPTOR hierarchical index (LanceDB table: `raptor_embeddings`)
 - `data/embedding_cache/` - Cached embeddings
-- `data/voyage_usage.json` - API token tracking
+- `data/voyage_usage.json` - Voyage AI (embeddings/rerank) token tracking
+- `data/llm_usage.json` - Gemini LLM token tracking with daily costs
 - `data/index_checkpoint.json` - Indexing checkpoint
 
 ## AI Conversations Integration
