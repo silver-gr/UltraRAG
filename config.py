@@ -189,6 +189,38 @@ class ConversationsConfig(BaseModel):
         return v
 
 
+class WebSearchConfig(BaseModel):
+    """Web search configuration using Tavily API.
+
+    Web search provides real-time information retrieval from the internet
+    to augment vault-based knowledge. Results are weighted against vault
+    sources for federated retrieval.
+    """
+    enabled: bool = Field(default=False)
+    weight: float = Field(default=0.7)  # Score multiplier vs vault (vault=1.0)
+    max_results: int = Field(default=5)
+    include_in_research: bool = Field(default=True)  # Include web in research() method
+
+    @field_validator('weight')
+    @classmethod
+    def validate_web_weight(cls, v: float) -> float:
+        """Validate weight is between 0 and 2."""
+        if not 0 <= v <= 2:
+            raise ValueError(f"weight must be between 0 and 2, got {v}")
+        return v
+
+    @field_validator('max_results')
+    @classmethod
+    def validate_max_results(cls, v: int) -> int:
+        """Validate max_results is reasonable."""
+        if not 1 <= v <= 20:
+            raise ValueError(
+                f"max_results must be between 1 and 20, got {v}. "
+                f"Higher values increase API costs."
+            )
+        return v
+
+
 class RaptorConfig(BaseModel):
     """RAPTOR (Recursive Abstractive Processing for Tree-Organized Retrieval) configuration.
 
@@ -236,6 +268,7 @@ class RAGConfig(BaseModel):
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     conversations: ConversationsConfig = Field(default_factory=ConversationsConfig)
+    web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     raptor: RaptorConfig = Field(default_factory=RaptorConfig)
 
     # Indexing options
@@ -380,6 +413,12 @@ def load_config() -> RAGConfig:
             path=Path(os.getenv("CONVERSATIONS_PATH", "")) if os.getenv("CONVERSATIONS_PATH") else None,
             weight=float(os.getenv("CONVERSATIONS_WEIGHT", "0.8")),
             include_in_default_search=os.getenv("CONVERSATIONS_IN_DEFAULT_SEARCH", "true").lower() == "true"
+        ),
+        web_search=WebSearchConfig(
+            enabled=os.getenv("WEB_SEARCH_ENABLED", "false").lower() == "true",
+            weight=float(os.getenv("WEB_SEARCH_WEIGHT", "0.7")),
+            max_results=int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5")),
+            include_in_research=os.getenv("WEB_SEARCH_IN_RESEARCH", "true").lower() == "true"
         ),
         raptor=RaptorConfig(
             enabled=os.getenv("ENABLE_RAPTOR", "false").lower() == "true",

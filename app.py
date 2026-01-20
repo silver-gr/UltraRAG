@@ -22,6 +22,70 @@ from llm_token_tracker import get_llm_tracker
 # Get Obsidian vault name from environment for clickable links
 OBSIDIAN_VAULT_NAME = os.getenv("OBSIDIAN_VAULT_NAME", "")
 
+
+def format_duration(seconds: float) -> str:
+    """Format duration in seconds to human-readable format (e.g., '2m 47s' or '45s')."""
+    if seconds >= 60:
+        mins = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{mins}m {secs}s"
+    else:
+        return f"{seconds:.1f}s"
+
+
+def extract_cited_numbers(text: str) -> set[int]:
+    """Extract all citation numbers from text (e.g., [1], [23], [145])."""
+    # Match [N] patterns where N is a number
+    matches = re.findall(r'\[(\d+)\]', text)
+    return set(int(m) for m in matches)
+
+
+def filter_and_renumber_citations(answer: str, sources: list) -> tuple[str, list]:
+    """Filter sources to only cited ones and renumber citations sequentially.
+
+    Args:
+        answer: The answer text with citations like [1], [7], [263]
+        sources: Full list of sources with 'rank' field
+
+    Returns:
+        Tuple of (remapped_answer, filtered_sources) where citations are 1-N
+    """
+    # Extract all cited source numbers from the answer
+    cited_numbers = extract_cited_numbers(answer)
+
+    if not cited_numbers:
+        return answer, sources
+
+    # Create mapping from old rank to new sequential number
+    # Sort cited numbers to maintain order
+    sorted_cited = sorted(cited_numbers)
+    old_to_new = {old: new for new, old in enumerate(sorted_cited, 1)}
+
+    # Remap citations in the answer text
+    # Must replace largest numbers first to avoid [1] replacing part of [12]
+    remapped_answer = answer
+    for old_num in sorted(cited_numbers, reverse=True):
+        new_num = old_to_new[old_num]
+        remapped_answer = remapped_answer.replace(f'[{old_num}]', f'[§{new_num}§]')
+
+    # Replace temporary markers with final numbers
+    remapped_answer = re.sub(r'\[§(\d+)§\]', r'[\1]', remapped_answer)
+
+    # Filter and renumber sources
+    # Create a lookup by rank
+    sources_by_rank = {s['rank']: s for s in sources}
+
+    filtered_sources = []
+    for old_rank in sorted_cited:
+        if old_rank in sources_by_rank:
+            source = sources_by_rank[old_rank].copy()
+            source['rank'] = old_to_new[old_rank]  # Renumber
+            source['original_rank'] = old_rank  # Keep original for reference
+            filtered_sources.append(source)
+
+    return remapped_answer, filtered_sources
+
+
 # Auto-load existing index on startup (skip manual button click)
 AUTOLOAD_INDEX = os.getenv("AUTOLOAD_INDEX", "true").lower() == "true"
 
@@ -94,7 +158,9 @@ def save_query_to_history(query: str, result: dict) -> None:
         'answer': result.get('answer', ''),
         'sources': result.get('sources', []),
         'source_summary': result.get('source_summary', {}),
-        'research_summary': result.get('research_summary', '')
+        'research_summary': result.get('research_summary', ''),
+        'gap_analyses': result.get('gap_analyses', []),
+        'gap_analyses_markdown': result.get('gap_analyses_markdown', '')
     }
 
     # Append and save
@@ -877,39 +943,54 @@ def main():
             exec_time = pending['exec_time']
             search_scope = pending.get('search_scope', '📓 Vault Only')
             research_mode = pending.get('research_mode', False)
+            tokens_used = pending.get('tokens_used', 0)
 
             # Clear pending result after retrieving
             st.session_state.pending_result = None
 
+            # Filter to cited sources only and renumber citations sequentially
+            original_source_count = len(result['sources'])
+            remapped_answer, filtered_sources = filter_and_renumber_citations(
+                result['answer'], result['sources']
+            )
+            cited_count = len(filtered_sources)
+
             # Display execution summary
-            total_sources = len(result['sources'])
-            word_count = len(result['answer'].split())
+            word_count = len(remapped_answer.split())
+            time_str = format_duration(exec_time)
+            tokens_str = f" • **{tokens_used:,} tokens**" if tokens_used > 0 else ""
+            sources_str = f"**Cited {cited_count} of {original_source_count} sources**" if research_mode else f"**{cited_count} sources**"
             st.markdown(
-                f"**Synthesized from {total_sources} sources** "
-                f"→ **{word_count:,} words** in **{exec_time:.1f}s** "
+                f"{sources_str} "
+                f"→ **{word_count:,} words** in **{time_str}**{tokens_str} "
                 f"• *saved to history*"
             )
 
-            # Display answer with clickable citation links
+            # Display answer with clickable citation links (using remapped answer)
             st.markdown("### 📝 Answer")
-            answer_with_links = linkify_citations(result['answer'])
+            answer_with_links = linkify_citations(remapped_answer)
             st.markdown(answer_with_links, unsafe_allow_html=True)
 
-            # Build source map for wikilink replacement
+            # Build source map for wikilink replacement (using filtered sources)
             source_map = {
                 source['rank']: source['title']
-                for source in result['sources']
+                for source in filtered_sources
             }
 
-            # Generate copy versions
-            clean_text = strip_citations(result['answer'])
-            linked_text = format_with_wikilink_footnotes(result['answer'], source_map)
+            # Generate copy versions (using remapped answer)
+            clean_text = strip_citations(remapped_answer)
+            linked_text = format_with_wikilink_footnotes(remapped_answer, source_map)
             render_copy_buttons(clean_text, linked_text)
 
             # Show research summary for research mode
             if research_mode and 'research_summary' in result:
                 with st.expander("🔬 Research Details", expanded=False):
                     st.text(result['research_summary'])
+
+            # Show gap analyses for research mode (valuable insights from iterative retrieval)
+            if research_mode and result.get('gap_analyses_markdown'):
+                with st.expander("🧠 Gap Analysis Insights", expanded=False):
+                    st.markdown(result['gap_analyses_markdown'])
 
             # Show source summary for federated queries
             if search_scope == "🔀 Both" and 'source_summary' in result:
@@ -920,9 +1001,9 @@ def main():
                     conv_count = by_type.get('conversations', 0)
                     st.info(f"📊 Sources: {vault_count} from vault, {conv_count} from conversations")
 
-            # Display all sources used in synthesis
-            st.markdown(f"### 📚 Sources ({len(result['sources'])})")
-            for source in result['sources']:
+            # Display only cited sources (filtered and renumbered)
+            st.markdown(f"### 📚 Sources ({cited_count})")
+            for source in filtered_sources:
                 source_type = source.get('source_type', 'vault')
                 type_icon = "📓" if source_type == 'vault' else "💬"
                 # Anchor for clickable citation
@@ -955,33 +1036,42 @@ def main():
             st.markdown(f"**{entry['query']}**")
 
             if entry.get('answer'):
-                total_sources = len(entry.get('sources', []))
-                word_count = len(entry['answer'].split())
-                st.markdown(f"**{total_sources} sources** → **{word_count:,} words**")
+                # Filter to cited sources only and renumber citations sequentially
+                original_sources = entry.get('sources', [])
+                remapped_answer, filtered_sources = filter_and_renumber_citations(
+                    entry['answer'], original_sources
+                )
+                cited_count = len(filtered_sources)
+                word_count = len(remapped_answer.split())
+                st.markdown(f"**{cited_count} sources** → **{word_count:,} words**")
 
-                # Display answer with clickable citations
+                # Display answer with clickable citations (using remapped answer)
                 st.markdown("### 📝 Answer")
-                answer_with_links = linkify_citations(entry['answer'])
+                answer_with_links = linkify_citations(remapped_answer)
                 st.markdown(answer_with_links, unsafe_allow_html=True)
 
-                # Build source map for wikilinks
+                # Build source map for wikilinks (using filtered sources)
                 source_map = {
                     source['rank']: source['title']
-                    for source in entry.get('sources', [])
+                    for source in filtered_sources
                 }
 
-                # Generate copy versions
-                clean_text = strip_citations(entry['answer'])
-                linked_text = format_with_wikilink_footnotes(entry['answer'], source_map)
+                # Generate copy versions (using remapped answer)
+                clean_text = strip_citations(remapped_answer)
+                linked_text = format_with_wikilink_footnotes(remapped_answer, source_map)
 
                 # Render copy buttons
                 render_copy_buttons(clean_text, linked_text)
 
-                # Display sources
-                sources = entry.get('sources', [])
-                if sources:
-                    st.markdown(f"### 📚 Sources ({len(sources)})")
-                    for source in sources:
+                # Show gap analyses if available (from research mode)
+                if entry.get('gap_analyses_markdown'):
+                    with st.expander("🧠 Gap Analysis Insights", expanded=False):
+                        st.markdown(entry['gap_analyses_markdown'])
+
+                # Display only cited sources (filtered and renumbered)
+                if filtered_sources:
+                    st.markdown(f"### 📚 Sources ({cited_count})")
+                    for source in filtered_sources:
                         source_type = source.get('source_type', 'vault')
                         type_icon = "📓" if source_type == 'vault' else "💬"
                         st.markdown(f'<div id="source-{source["rank"]}"></div>', unsafe_allow_html=True)
@@ -1015,6 +1105,9 @@ def main():
                 else:
                     spinner_message = "Searching knowledge base..."
 
+                # Capture token usage before query
+                llm_tracker = get_llm_tracker()
+                tokens_before = llm_tracker.get_today_totals()
                 start_time = time.time()
 
                 with st.spinner(spinner_message):
@@ -1044,6 +1137,10 @@ def main():
                             total_sources = len(result['sources'])
                             word_count = len(result['answer'].split())
 
+                            # Calculate tokens used for this query
+                            tokens_after = llm_tracker.get_today_totals()
+                            tokens_used = (tokens_after[0] - tokens_before[0]) + (tokens_after[1] - tokens_before[1])
+
                             # Save to persistent history
                             save_query_to_history(query, result)
 
@@ -1054,7 +1151,8 @@ def main():
                                     'query': query,
                                     'exec_time': exec_time,
                                     'search_scope': search_scope,
-                                    'research_mode': research_mode
+                                    'research_mode': research_mode,
+                                    'tokens_used': tokens_used
                                 }
                                 st.session_state.history_updated = True
                                 st.rerun()  # Rerun to update sidebar with new history
@@ -1062,28 +1160,37 @@ def main():
                             # Reset flag for next query
                             st.session_state.history_updated = False
 
+                            # Filter to cited sources only and renumber citations sequentially
+                            original_source_count = len(result['sources'])
+                            remapped_answer, filtered_sources = filter_and_renumber_citations(
+                                result['answer'], result['sources']
+                            )
+                            cited_count = len(filtered_sources)
+
                             # Display execution summary with history confirmation
+                            time_str = format_duration(exec_time)
+                            tokens_str = f" • **{tokens_used:,} tokens**" if tokens_used > 0 else ""
+                            sources_str = f"**Cited {cited_count} of {original_source_count} sources**" if research_mode else f"**{cited_count} sources**"
                             st.markdown(
-                                f"**Synthesized from {total_sources} sources** "
-                                f"→ **{word_count:,} words** in **{exec_time:.1f}s** "
+                                f"{sources_str} "
+                                f"→ **{word_count:,} words** in **{time_str}**{tokens_str} "
                                 f"• *saved to history*"
                             )
 
-                            # Display answer with clickable citation links
+                            # Display answer with clickable citation links (using remapped answer)
                             st.markdown("### 📝 Answer")
-                            answer_with_links = linkify_citations(result['answer'])
+                            answer_with_links = linkify_citations(remapped_answer)
                             st.markdown(answer_with_links, unsafe_allow_html=True)
 
-                            # Build source map for wikilink replacement (rank -> title)
-                            # Include ALL sources since LLM may cite beyond displayed count
+                            # Build source map for wikilink replacement (using filtered sources)
                             source_map = {
                                 source['rank']: source['title']
-                                for source in result['sources']
+                                for source in filtered_sources
                             }
 
-                            # Generate copy versions
-                            clean_text = strip_citations(result['answer'])
-                            linked_text = format_with_wikilink_footnotes(result['answer'], source_map)
+                            # Generate copy versions (using remapped answer)
+                            clean_text = strip_citations(remapped_answer)
+                            linked_text = format_with_wikilink_footnotes(remapped_answer, source_map)
 
                             # Render copy buttons
                             render_copy_buttons(clean_text, linked_text)
@@ -1092,6 +1199,11 @@ def main():
                             if research_mode and 'research_summary' in result:
                                 with st.expander("🔬 Research Details", expanded=False):
                                     st.text(result['research_summary'])
+
+                            # Show gap analyses for research mode (valuable insights from iterative retrieval)
+                            if research_mode and result.get('gap_analyses_markdown'):
+                                with st.expander("🧠 Gap Analysis Insights", expanded=False):
+                                    st.markdown(result['gap_analyses_markdown'])
 
                             # Show source summary for federated queries
                             if search_scope == "🔀 Both" and 'source_summary' in result:
@@ -1102,9 +1214,9 @@ def main():
                                     conv_count = by_type.get('conversations', 0)
                                     st.info(f"📊 Sources: {vault_count} from vault, {conv_count} from conversations")
 
-                            # Display all sources used in synthesis
-                            st.markdown(f"### 📚 Sources ({len(result['sources'])})")
-                            for source in result['sources']:
+                            # Display only cited sources (filtered and renumbered)
+                            st.markdown(f"### 📚 Sources ({cited_count})")
+                            for source in filtered_sources:
                                 source_type = source.get('source_type', 'vault')
                                 type_icon = "📓" if source_type == 'vault' else "💬"
                                 # Add anchor ID for citation linking

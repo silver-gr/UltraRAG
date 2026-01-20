@@ -9,6 +9,7 @@ import logging
 import sys
 import json
 import gc
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Set
 from llama_index.core import Settings
@@ -62,6 +63,39 @@ _setup_logging()
 logger = logging.getLogger(__name__)
 
 
+# ============================================
+# Research Method Dataclasses
+# ============================================
+
+@dataclass
+class Source:
+    """Represents a source in research results."""
+    type: str  # "vault", "conversations", "web"
+    path: Optional[str]  # file path for vault, None for web
+    url: Optional[str]  # URL for web sources
+    relevance: float
+    snippet: str
+    title: str
+
+
+@dataclass
+class Citation:
+    """Formatted citation for inline use."""
+    index: int
+    text: str  # e.g., "[1] Title - vault" or "[2] Title - web"
+
+
+@dataclass
+class ResearchResult:
+    """Result from research() method."""
+    summary: str
+    sources: List[Source]
+    citations: List[Citation]
+    vault_sources: int
+    web_sources: int
+    query: str
+
+
 class UltraRAG:
     """Main RAG system for Obsidian vault."""
     
@@ -106,6 +140,11 @@ class UltraRAG:
             self.raptor_manager = None
             if self.config.raptor.enabled:
                 self._setup_raptor()
+
+            # Web search retriever
+            self.web_retriever = None
+            if self.config.web_search.enabled:
+                self._setup_web_retriever()
 
             logger.info("UltraRAG system initialized successfully")
 
@@ -243,6 +282,35 @@ class UltraRAG:
             logger.warning(f"Failed to setup query transformer: {e}")
             print(f"Warning: Could not initialize query transformer: {e}")
             self.query_transformer = None
+
+    def _setup_web_retriever(self):
+        """Setup web search retriever using Tavily API."""
+        logger.info("Setting up web retriever...")
+        print("Setting up web search retriever...")
+
+        try:
+            from web_retriever import WebRetriever
+
+            self.web_retriever = WebRetriever(
+                max_results=self.config.web_search.max_results
+            )
+
+            if self.web_retriever.is_available():
+                logger.info("Web search retriever initialized successfully")
+                print("Web search: Enabled (Tavily API)")
+            else:
+                logger.warning("Web search retriever disabled (TAVILY_API_KEY not found)")
+                print("Web search: Disabled (TAVILY_API_KEY not found)")
+                self.web_retriever = None
+
+        except ImportError as e:
+            logger.warning(f"Could not import web_retriever: {e}")
+            print(f"Warning: Web retriever not available: {e}")
+            self.web_retriever = None
+        except Exception as e:
+            logger.warning(f"Failed to setup web retriever: {e}")
+            print(f"Warning: Could not initialize web retriever: {e}")
+            self.web_retriever = None
 
     def _get_exclusion_patterns(self) -> list[dict]:
         """Get file exclusion patterns from settings.
@@ -1260,6 +1328,20 @@ class UltraRAG:
                 research_prompt = research_prompt.replace("{context_str}", numbered_context)
                 research_prompt = research_prompt.replace("{query_str}", query_str)
 
+                # For large source sets (300+), enforce minimum word count
+                if num_sources >= 300:
+                    word_count_instruction = (
+                        "\n\n**CRITICAL LENGTH REQUIREMENT**: With {num_sources} sources provided, "
+                        "you MUST generate a MINIMUM of 3,000 words. Aim for 5,000-10,000 words "
+                        "to adequately cover all relevant information. Do NOT stop early.\n"
+                    ).format(num_sources=num_sources)
+                    # Insert before the final instruction line
+                    research_prompt = research_prompt.replace(
+                        "Generate a thorough, detailed research report",
+                        word_count_instruction + "Generate a thorough, detailed research report"
+                    )
+                    logger.info(f"Enforcing minimum 3,000 word output for {num_sources} sources")
+
                 try:
                     # Use LLM directly for better control over context
                     response = Settings.llm.complete(research_prompt)
@@ -1279,7 +1361,9 @@ class UltraRAG:
             # Format result (complete() returns CompletionResponse with .text attribute)
             result = {
                 'answer': response.text,
-                'research_summary': research_result.get_iteration_summary()
+                'research_summary': research_result.get_iteration_summary(),
+                'gap_analyses': research_result.get_gap_analyses(),
+                'gap_analyses_markdown': research_result.get_gap_analyses_markdown()
             }
 
             if return_sources:
@@ -1303,6 +1387,192 @@ class UltraRAG:
         except Exception as e:
             logger.error(f"Research mode query failed: {e}", exc_info=True)
             raise RuntimeError(f"Research mode query failed: {e}") from e
+
+    def research(self, topic: str, depth: str = "standard") -> ResearchResult:
+        """Research a topic using vault and optionally web sources.
+
+        This method provides a unified interface for research that combines
+        vault knowledge with optional web search. It returns a structured
+        ResearchResult with synthesized summary, sources, and citations.
+
+        Args:
+            topic: The research topic/question
+            depth: Research depth level:
+                - "quick": Vault only (fastest)
+                - "standard": Vault + web search if enabled
+                - "deep": Full research mode with iterative retrieval
+
+        Returns:
+            ResearchResult with synthesized summary and sources
+
+        Example:
+            >>> result = rag.research("What are the benefits of meditation?", depth="standard")
+            >>> print(result.summary)
+            >>> for source in result.sources:
+            ...     print(f"{source.title} ({source.type})")
+        """
+        logger.info(f"Research query: {topic[:100]}... (depth={depth})")
+        print(f"\n🔍 Research: {topic}")
+        print(f"Depth: {depth}")
+
+        all_sources: List[Source] = []
+        all_nodes = []
+        vault_count = 0
+        web_count = 0
+        conv_count = 0
+
+        try:
+            # Step 1: Gather vault/conversation sources based on depth
+            if depth == "quick":
+                # Quick: vault only
+                print("Searching vault only (quick mode)...")
+                result = self.query_vault_only(topic, return_sources=True)
+                if result and 'sources' in result:
+                    for src in result['sources']:
+                        source_type = src.get('source_type', 'vault')
+                        all_sources.append(Source(
+                            type=source_type,
+                            path=src.get('file'),
+                            url=None,
+                            relevance=src.get('score', 0.0),
+                            snippet=src.get('excerpt', ''),
+                            title=src.get('title', 'Unknown')
+                        ))
+                        if source_type == 'vault':
+                            vault_count += 1
+                        elif source_type == 'conversations':
+                            conv_count += 1
+                    summary = result.get('answer', '')
+
+            elif depth == "deep":
+                # Deep: use existing research mode
+                print("Running deep research (iterative retrieval)...")
+                result = self.query_research(topic, return_sources=True)
+                if result and 'sources' in result:
+                    for src in result['sources']:
+                        source_type = src.get('source_type', 'vault')
+                        all_sources.append(Source(
+                            type=source_type,
+                            path=src.get('file'),
+                            url=None,
+                            relevance=src.get('score', 0.0),
+                            snippet=src.get('excerpt', ''),
+                            title=src.get('title', 'Unknown')
+                        ))
+                        if source_type == 'vault':
+                            vault_count += 1
+                        elif source_type == 'conversations':
+                            conv_count += 1
+                    summary = result.get('answer', '')
+
+            else:
+                # Standard: federated query (vault + conversations if available)
+                print("Searching vault and conversations...")
+                result = self.query_federated(topic, return_sources=True)
+                if result and 'sources' in result:
+                    for src in result['sources']:
+                        source_type = src.get('source_type', 'vault')
+                        all_sources.append(Source(
+                            type=source_type,
+                            path=src.get('file'),
+                            url=None,
+                            relevance=src.get('score', 0.0),
+                            snippet=src.get('excerpt', ''),
+                            title=src.get('title', 'Unknown')
+                        ))
+                        if source_type == 'vault':
+                            vault_count += 1
+                        elif source_type == 'conversations':
+                            conv_count += 1
+                    summary = result.get('answer', '')
+
+            # Step 2: Add web search if enabled and depth is not "quick"
+            if (
+                depth != "quick" and
+                self.config.web_search.enabled and
+                self.config.web_search.include_in_research and
+                self.web_retriever is not None
+            ):
+                print("Adding web search results...")
+                try:
+                    web_nodes = self.web_retriever.retrieve(
+                        topic,
+                        max_results=self.config.web_search.max_results
+                    )
+
+                    # Apply weight to web results
+                    web_weight = self.config.web_search.weight
+                    for node in web_nodes:
+                        weighted_score = (node.score or 0.5) * web_weight
+                        all_sources.append(Source(
+                            type="web",
+                            path=None,
+                            url=node.node.metadata.get('url', ''),
+                            relevance=weighted_score,
+                            snippet=node.node.text[:300] + "..." if len(node.node.text) > 300 else node.node.text,
+                            title=node.node.metadata.get('title', 'Web Result')
+                        ))
+                        web_count += 1
+                        all_nodes.append(node)
+
+                    logger.info(f"Added {web_count} web results to research")
+
+                except Exception as e:
+                    logger.warning(f"Web search failed during research: {e}")
+                    print(f"Warning: Web search failed: {e}")
+
+            # Step 3: Re-synthesize if we added web results
+            if web_count > 0 and all_nodes:
+                print("Re-synthesizing with web sources...")
+
+                # Build combined context
+                context_parts = []
+                for i, source in enumerate(all_sources, 1):
+                    type_icon = {"vault": "📓", "conversations": "💬", "web": "🌐"}.get(source.type, "📄")
+                    location = source.url if source.type == "web" else (source.path or "unknown")
+                    context_parts.append(
+                        f"[{i}] {type_icon} {source.title}\n"
+                        f"Source: {location} ({source.type})\n"
+                        f"Content:\n{source.snippet}\n"
+                    )
+                combined_context = "\n---\n".join(context_parts)
+
+                # Build synthesis prompt
+                from federated_query import _get_federated_template
+                source_types = list(set(s.type for s in all_sources))
+                template = _get_federated_template(source_types)
+                prompt = template.replace("{context_str}", combined_context).replace("{query_str}", topic)
+
+                # Generate combined summary
+                response = Settings.llm.complete(prompt)
+                summary = response.text
+
+            # Step 4: Build citations
+            citations = []
+            for i, source in enumerate(all_sources, 1):
+                type_label = {"vault": "vault", "conversations": "conv", "web": "web"}.get(source.type, source.type)
+                citations.append(Citation(
+                    index=i,
+                    text=f"[{i}] {source.title} - {type_label}"
+                ))
+
+            # Sort sources by relevance
+            all_sources.sort(key=lambda s: s.relevance, reverse=True)
+
+            logger.info(f"Research complete: {vault_count} vault, {conv_count} conv, {web_count} web sources")
+
+            return ResearchResult(
+                summary=summary,
+                sources=all_sources,
+                citations=citations,
+                vault_sources=vault_count + conv_count,  # Combined local sources
+                web_sources=web_count,
+                query=topic
+            )
+
+        except Exception as e:
+            logger.error(f"Research failed: {e}", exc_info=True)
+            raise RuntimeError(f"Research failed: {e}") from e
 
     def get_token_usage(self) -> dict:
         """Get current Voyage AI token usage statistics."""

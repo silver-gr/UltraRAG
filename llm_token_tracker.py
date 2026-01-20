@@ -191,6 +191,18 @@ class LLMTokenTracker:
             today = date.today().isoformat()
             return self.daily_usage.get(today)
 
+    def get_today_totals(self) -> tuple[int, int]:
+        """Get today's token totals as (input_tokens, output_tokens).
+
+        Useful for calculating per-query token usage by taking before/after snapshots.
+        """
+        with self._lock:
+            today = date.today().isoformat()
+            usage = self.daily_usage.get(today)
+            if usage:
+                return (usage.input_tokens, usage.output_tokens)
+            return (0, 0)
+
     def get_all_daily_usage(self) -> list[DailyUsage]:
         """Get all daily usage stats sorted by date (newest first)."""
         with self._lock:

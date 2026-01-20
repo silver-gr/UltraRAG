@@ -37,16 +37,34 @@ def _get_federated_template(source_types: List[str]) -> str:
     """Generate appropriate prompt template based on active sources."""
     has_vault = "vault" in source_types
     has_conv = "conversations" in source_types
+    has_web = "web" in source_types
 
-    if has_vault and has_conv:
-        intro = "You are a personal knowledge assistant with access to both personal notes and AI conversation history."
-        note = "\nSome context may come from past AI conversations (marked with source_type: conversations).\nTreat these as reference material that may contain useful information."
-    elif has_conv:
-        intro = "You are a knowledge assistant analyzing AI conversation history."
-        note = "\nAll context comes from past AI conversations. Extract insights and patterns from these discussions."
+    # Build intro based on available sources
+    sources_list = []
+    if has_vault:
+        sources_list.append("personal notes from an Obsidian vault")
+    if has_conv:
+        sources_list.append("AI conversation history")
+    if has_web:
+        sources_list.append("web search results")
+
+    if len(sources_list) > 1:
+        intro = f"You are a personal knowledge assistant with access to {', '.join(sources_list[:-1])} and {sources_list[-1]}."
+    elif sources_list:
+        intro = f"You are a knowledge assistant analyzing {sources_list[0]}."
     else:
-        intro = "You are a personal knowledge assistant analyzing notes from an Obsidian vault."
-        note = ""
+        intro = "You are a personal knowledge assistant."
+
+    # Build notes about source types
+    notes = []
+    if has_conv:
+        notes.append("Some context may come from past AI conversations (marked with source_type: conversations).\nTreat these as reference material that may contain useful information.")
+    if has_web:
+        notes.append("Some context comes from web search results (marked with source_type: web).\nWeb sources are marked with their URL for reference.")
+
+    note_section = "\n".join(notes)
+    if note_section:
+        note_section = "\n" + note_section
 
     return f"""{intro}
 
@@ -54,7 +72,7 @@ Context from knowledge base (numbered for citation):
 ---------------------
 {{context_str}}
 ---------------------
-{note}
+{note_section}
 
 Instructions:
 - TASK: Answer the user's question using ONLY the provided context.
@@ -79,7 +97,7 @@ class IndexSource:
     """Represents a source index in the federation."""
     name: str
     index: VectorStoreIndex
-    source_type: Literal["vault", "conversations"]
+    source_type: Literal["vault", "conversations", "web"]
     weight: float = 1.0  # Score multiplier for this source
     nodes: Optional[List] = None  # For BM25 retriever
     wikilink_graph: Optional[Dict[str, List[str]]] = None
@@ -426,7 +444,7 @@ class FederatedQueryEngine:
         summary = {
             "total_nodes": len(nodes),
             "by_source": {},
-            "by_type": {"vault": 0, "conversations": 0}
+            "by_type": {"vault": 0, "conversations": 0, "web": 0}
         }
 
         for node in nodes:

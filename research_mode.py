@@ -25,6 +25,7 @@ class ResearchIteration:
     nodes: List[NodeWithScore]
     gaps_identified: Optional[str] = None
     confidence_score: float = 0.0
+    full_analysis: Optional[str] = None  # Full gap analysis LLM response
 
 
 @dataclass
@@ -65,6 +66,52 @@ class ResearchResult:
 
         return "\n".join(lines)
 
+    def get_gap_analyses(self) -> List[Dict[str, Any]]:
+        """Get all gap analyses from iterations with full context."""
+        analyses = []
+        for iter_result in self.iterations:
+            if iter_result.full_analysis:
+                analyses.append({
+                    'iteration': iter_result.iteration,
+                    'query': iter_result.query,
+                    'confidence': iter_result.confidence_score,
+                    'gaps': iter_result.gaps_identified,
+                    'full_analysis': iter_result.full_analysis,
+                    'nodes_retrieved': len(iter_result.nodes)
+                })
+        return analyses
+
+    def get_gap_analyses_markdown(self) -> str:
+        """Get gap analyses formatted as markdown for display."""
+        analyses = self.get_gap_analyses()
+        if not analyses:
+            return ""
+
+        lines = ["## Gap Analysis Summary\n"]
+        for analysis in analyses:
+            lines.append(f"### Iteration {analysis['iteration']}")
+            lines.append(f"**Query:** {analysis['query']}")
+            lines.append(f"**Confidence:** {analysis['confidence']:.2f}")
+            lines.append(f"**Nodes Retrieved:** {analysis['nodes_retrieved']}")
+            if analysis['full_analysis']:
+                # Clean up the analysis text for display
+                full_text = analysis['full_analysis']
+                # Remove the CONFIDENCE/GAPS prefix lines, keep the insights
+                lines_to_keep = []
+                for line in full_text.split('\n'):
+                    # Skip the structured prefix lines
+                    if line.strip().upper().startswith('CONFIDENCE:'):
+                        continue
+                    if line.strip().upper().startswith('GAPS:'):
+                        continue
+                    lines_to_keep.append(line)
+                cleaned = '\n'.join(lines_to_keep).strip()
+                if cleaned:
+                    lines.append(f"\n**Analysis:**\n{cleaned}")
+            lines.append("\n---\n")
+
+        return '\n'.join(lines)
+
 
 class ResearchRetriever:
     """Iterative retrieval with query refinement based on initial results.
@@ -96,10 +143,11 @@ class ResearchRetriever:
     EXHAUSTIVE_MAX_ITERATIONS = 5
 
     # Delay between iterations to avoid rate limiting (seconds)
-    ITERATION_DELAY = 5
+    # Set to 0 to disable rate limiting delays
+    ITERATION_DELAY = 0
 
-    # Lightweight model for gap analysis (faster, less rate limiting)
-    GAP_ANALYSIS_MODEL = "gemini-flash-latest"
+    # Model for gap analysis (same as main LLM for consistency)
+    GAP_ANALYSIS_MODEL = "gemini-3-flash-preview"
 
     def __init__(
         self,
@@ -158,7 +206,7 @@ class ResearchRetriever:
                 model=self.GAP_ANALYSIS_MODEL,
                 api_key=api_key,
                 temperature=0.1,
-                max_tokens=1024,  # Gap analysis only needs short responses
+                max_tokens=4096,  # Increased: model may provide detailed analysis with large context
                 is_function_calling_model=False,  # Disable AFC
             )
             # Wrap with token tracking
@@ -280,7 +328,7 @@ class ResearchRetriever:
                     retrieved_paths.add(file_path)
 
             # Analyze gaps and compute confidence
-            gaps, confidence = self._analyze_gaps(
+            gaps, confidence, full_analysis = self._analyze_gaps(
                 query, list(all_nodes.values()), is_exhaustive=is_exhaustive
             )
 
@@ -292,13 +340,14 @@ class ResearchRetriever:
             if gaps:
                 logger.info(f"Identified gaps: {gaps}")
 
-            # Store iteration result
+            # Store iteration result with full analysis
             iteration_result = ResearchIteration(
                 iteration=iteration_num,
                 query=current_query,
                 nodes=nodes,
                 gaps_identified=gaps,
-                confidence_score=confidence
+                confidence_score=confidence,
+                full_analysis=full_analysis
             )
             iterations.append(iteration_result)
 
@@ -369,7 +418,7 @@ class ResearchRetriever:
         query: str,
         nodes: List[NodeWithScore],
         is_exhaustive: bool = False
-    ) -> tuple[Optional[str], float]:
+    ) -> tuple[Optional[str], float, Optional[str]]:
         """Analyze gaps in retrieved content using LLM.
 
         Args:
@@ -378,16 +427,16 @@ class ResearchRetriever:
             is_exhaustive: If True, use stricter gap analysis for comprehensive queries
 
         Returns:
-            Tuple of (gaps description, confidence score 0-1)
+            Tuple of (gaps description, confidence score 0-1, full analysis text)
         """
         if not nodes:
             logger.debug("No nodes to analyze, returning low confidence")
-            return "No relevant information found", 0.0
+            return "No relevant information found", 0.0, None
 
-        # Build context from top nodes - use FULL content for quality gap analysis
-        # Modern LLMs have massive context (Gemini: 1M tokens), no reason to truncate
+        # Build context from top nodes for gap analysis
+        # 20 nodes gives good coverage without excessive token usage
         context_chunks = []
-        for idx, node in enumerate(nodes[:10], 1):  # Analyze top 10 nodes, not just 5
+        for idx, node in enumerate(nodes[:20], 1):  # Analyze top 20 nodes
             title = node.metadata.get('title', 'Unknown')
             file_path = node.metadata.get('file_path', '')
             context_chunks.append(f"[Source {idx}: {title}]\nPath: {file_path}\n{node.node.text}")
@@ -410,7 +459,7 @@ IMPORTANT: This is an EXHAUSTIVE query - the user wants ALL/EVERY matching item.
 {exhaustive_note}
 Query: {query}
 
-Retrieved Information (top 10 chunks from knowledge base):
+Retrieved Information (top 20 chunks from knowledge base):
 {context}
 
 Evaluate:
@@ -478,11 +527,11 @@ Guidelines:
             if confidence == 0.5:
                 logger.warning(f"Could not parse confidence from response, using default 0.5")
 
-            return gaps, confidence
+            return gaps, confidence, result  # Include full analysis text
 
         except Exception as e:
             logger.error(f"Error during gap analysis: {e}", exc_info=True)
-            return "Analysis failed", 0.5
+            return "Analysis failed", 0.5, None
 
     def _generate_subqueries(
         self,
