@@ -470,14 +470,14 @@ CHUNK_OVERLAP=75
 
 # Retrieval (working well)
 TOP_K=75
-RERANK_TOP_N=10
+RERANK_TOP_N=100
 RERANKER_MODEL=rerank-2.5
 SIMILARITY_THRESHOLD=0.3
 
-# RAPTOR (disabled)
+# RAPTOR (disabled by default)
 ENABLE_RAPTOR=false
 RAPTOR_MODE=collapsed
-RAPTOR_CHUNK_SIZE=400
+RAPTOR_CHUNK_SIZE=1024
 RAPTOR_TOP_K=10
 
 # Research Mode (enabled, use for complex queries)

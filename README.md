@@ -1,8 +1,21 @@
 # UltraRAG - World-Class RAG for Obsidian Vaults
 
+[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](CHANGELOG.md)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 A sophisticated Retrieval-Augmented Generation (RAG) system specifically designed for personal Obsidian knowledge bases. Implements state-of-the-art techniques from 2024-2025 research including semantic chunking, hybrid retrieval, graph-based search, self-correcting retrieval, iterative research mode, and advanced reranking.
 
 ![UltraRAG Web Interface](docs/app.png)
+
+## What's New in v1.3.0
+
+- 🔬 **Research Mode Enhancements**: Exhaustive queries (`@all`), dual-model architecture, progressive retry
+- 💶 **Euro Currency Display**: Costs shown in EUR with VAT for Google Cloud billing alignment
+- 📊 **LLM Token Tracking**: Per-day cost aggregation with detailed breakdown
+- 🔗 **Citation Filtering**: Show only cited sources in research mode results
+- 📝 **Source Excerpts**: Increased display limit to 1500 characters
+
+See [CHANGELOG.md](CHANGELOG.md) for full version history.
 
 ## Features
 
@@ -11,11 +24,11 @@ A sophisticated Retrieval-Augmented Generation (RAG) system specifically designe
 - ✅ **Advanced Chunking**: Markdown-aware semantic chunking with configurable strategies
 - ✅ **Late Chunking**: 10-12% better retrieval accuracy by preserving document-level context
 - ✅ **Multiple Embedding Options**:
-  - Voyage-3-large (best quality)
-  - Qwen3-Embedding-8B (best open-source)
-  - OpenAI text-embedding-3-large
+  - voyage-3.5-lite (default, 200M free tokens/month)
+  - voyage-3-large (highest quality)
+  - qwen3-8b (best open-source, self-hosted)
 - ✅ **Vector Database Support**: LanceDB (embedded) or Qdrant (scalable)
-- ✅ **Advanced Reranking**: Voyage Rerank 2, Jina v2, or Cohere
+- ✅ **Advanced Reranking**: Voyage rerank-2.5 (200M free tokens/month)
 - ✅ **Hybrid Retrieval**: Vector + query fusion for better results
 - ✅ **Query Transformation**: HyDE, Multi-Query expansion, or both for significantly better retrieval
 - ✅ **PTCF Prompting**: Research-backed prompt engineering for Gemini 3 Flash
@@ -74,16 +87,16 @@ Edit `.env` to customize:
 
 ### Embedding Models
 ```bash
-# Best quality (recommended)
+# Default - best value (200M free tokens/month)
+EMBEDDING_MODEL=voyage-3.5-lite
+VOYAGE_API_KEY=your_key
+
+# Highest quality (paid)
 EMBEDDING_MODEL=voyage-3-large
 VOYAGE_API_KEY=your_key
 
-# Best open-source (free, self-hosted)
+# Best open-source (free, self-hosted, requires 16-32GB VRAM)
 EMBEDDING_MODEL=qwen3-8b
-
-# Budget option (free API)
-EMBEDDING_MODEL=openai-3-large
-GOOGLE_API_KEY=your_key  # Use Gemini embeddings
 ```
 
 ### Vector Database
@@ -103,7 +116,7 @@ QDRANT_PORT=6333
 CHUNK_SIZE=512              # Optimal for mixed content
 CHUNK_OVERLAP=75            # 15% overlap
 TOP_K=75                    # Initial retrieval candidates
-RERANK_TOP_N=10            # Final results after reranking
+RERANK_TOP_N=100            # After reranking (UI max_sources controls display)
 ENABLE_HYBRID_SEARCH=true  # Use query fusion
 
 # Query transformation for better retrieval
@@ -317,7 +330,7 @@ notes = rag.search_notes("project ideas", top_k=5)
     └────┬─────┘
          │
     ┌────▼─────────┐
-    │  Embeddings  │  Voyage-3 / Qwen3 / OpenAI
+    │  Embeddings  │  voyage-3.5-lite (default) / qwen3-8b
     └────┬─────────┘
          │
     ┌────▼──────────┐
@@ -329,7 +342,7 @@ notes = rag.search_notes("project ideas", top_k=5)
     └────┬─────────┘
          │
     ┌────▼─────────┐
-    │  Reranking   │  Voyage Rerank 2 / Jina v2
+    │  Reranking   │  Voyage rerank-2.5
     └────┬─────────┘
          │
     ┌────▼──────────┐
@@ -340,9 +353,9 @@ notes = rag.search_notes("project ideas", top_k=5)
 ## Cost Analysis
 
 ### One-time Indexing (1,650 notes ~404MB)
-- **Voyage-3-large**: $13-40 (API pricing)
-- **Qwen3-8B**: Free (self-hosted, requires 16-32GB VRAM)
-- **OpenAI**: ~$13
+- **voyage-3.5-lite**: Free (200M tokens/month)
+- **voyage-3-large**: $13-40 (API pricing)
+- **qwen3-8b**: Free (self-hosted, requires 16-32GB VRAM)
 - **Time**: 10-30 minutes depending on model
 
 ### Ongoing Usage
@@ -424,7 +437,7 @@ Full documentation is available in the [`docs/`](docs/) folder:
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [Testing Guide](docs/TESTING.md)
 - [RAGAS Evaluation Guide](docs/EVALUATION.md)
-- **Feature Guides**: [Late Chunking](docs/features/LATE_CHUNKING.md) | [Query Transformation](docs/features/QUERY_TRANSFORMATION.md) | [Self-Correction](docs/features/SELF_CORRECTION.md) | [Graph Retrieval](docs/features/GRAPH_RETRIEVAL.md)
+- **Feature Guides**: [Late Chunking](docs/features/LATE_CHUNKING.md) | [Query Transformation](docs/features/QUERY_TRANSFORMATION.md) | [Self-Correction](docs/features/SELF_CORRECTION.md) | [Graph Retrieval](docs/features/GRAPH_RETRIEVAL.md) | [Research Mode](docs/features/RESEARCH_MODE_ENHANCEMENTS.md) | [File Exclusions](docs/features/FILE_EXCLUSIONS.md)
 
 ## Acknowledgments
 

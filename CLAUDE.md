@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-UltraRAG is a production-grade RAG system for Obsidian vaults implementing late chunking, hybrid retrieval, query transformation (HyDE/Multi-Query), and self-correction patterns.
+**UltraRAG v1.3.0** - A production-grade RAG system for Obsidian vaults implementing late chunking, hybrid retrieval, query transformation (HyDE/Multi-Query), self-correction patterns, and iterative research mode.
+
+See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## Development Commands
 
@@ -84,6 +86,26 @@ UltraRAG can be installed as a standalone app on your dock/home screen:
 
 Note: For mobile access, run Streamlit with `--server.address 0.0.0.0` to allow network access.
 
+## CLI Commands
+
+When running `python main.py`, the following commands are available:
+
+| Command | Description |
+|---------|-------------|
+| `<query>` | Standard RAG query |
+| `@research <query>` | Research mode with gap analysis |
+| `@all <query>` | Exhaustive research (all iterations) |
+| `@raptor <query>` | Query RAPTOR hierarchical index |
+| `@vault <query>` | Search vault only (no conversations) |
+| `@conv <query>` | Search conversations only |
+| `index` | Re-index the vault |
+| `conv` | Index AI conversations |
+| `raptor` | Build RAPTOR index |
+| `cache` | Invalidate docstore cache |
+| `stats` | Show index statistics |
+| `help` | Show help |
+| `quit` / `exit` | Exit CLI |
+
 ## Architecture
 
 ### Entry Points
@@ -151,6 +173,16 @@ raptor_index.py → recursive clustering → LLM summarization → tree traversa
 - **config.py**: Pydantic models (`RAGConfig`, `EmbeddingConfig`, `LLMConfig`, etc.)
 - **.env**: Runtime configuration (copy from `.env.example`)
 
+### Web UI Features
+The Streamlit web interface (`app.py`) provides:
+- **Search**: Query input with Research Mode toggle
+- **Results**: Answer with inline citations `[1]`, `[2]`, `[3]`
+- **Sources**: Expandable source list with clickable Obsidian links
+- **Settings**: File exclusions, pattern matching preview
+- **History**: Past queries with one-click re-run
+- **Stats**: Index info, LLM costs dialog, Voyage token usage
+- **Scope**: Toggle between Vault, Conversations, or Both
+
 ## Key Patterns
 
 ### Token Tracking (Voyage AI)
@@ -161,6 +193,9 @@ raptor_index.py → recursive clustering → LLM summarization → tree traversa
 - **Storage**: `data/llm_usage.json`
 - **Pricing**: gemini-3-flash-preview ($0.50/$3.00 per 1M tokens), gemini-3-pro-preview ($2.00/$12.00)
 - **UI**: Click "LLM Costs" button in sidebar to view daily breakdown table
+- **Currency**: Costs displayed in EUR with VAT (configurable via `.env`)
+  - `CURRENCY_EXCHANGE_RATE=0.8633` - USD to EUR conversion rate
+  - `VAT_RATE=0.24` - VAT percentage (24% for Greece)
 - **API**: `from llm_token_tracker import get_llm_tracker; tracker.get_total_stats()`
 
 The `TrackedLLM` wrapper (`tracked_llm.py`) automatically intercepts all LLM calls and records token usage.
@@ -185,12 +220,14 @@ pytest -m unit            # Unit tests only
 ```
 
 ## Data Directories
-- `data/lancedb/` - Vector index (tables: `vectors` for vault, `conversations` for AI chats)
+- `data/lancedb/` - Vector index (tables: `vectors` for vault, `conversations` for AI chats, `settings` for exclusions)
 - `data/raptor/` - RAPTOR hierarchical index (LanceDB table: `raptor_embeddings`)
+- `data/cache/docstore_nodes.pkl` - Cached docstore for fast restarts
 - `data/embedding_cache/` - Cached embeddings
 - `data/voyage_usage.json` - Voyage AI (embeddings/rerank) token tracking
 - `data/llm_usage.json` - Gemini LLM token tracking with daily costs
 - `data/index_checkpoint.json` - Indexing checkpoint
+- `data/query_history.json` - Persistent query history
 
 ## AI Conversations Integration
 Enable federated search across vault + AI conversation exports:
@@ -206,7 +243,7 @@ Enable RAPTOR for better multi-document reasoning through hierarchical clusterin
 ```bash
 ENABLE_RAPTOR=true
 RAPTOR_MODE=collapsed  # or "tree_traversal"
-RAPTOR_CHUNK_SIZE=400
+RAPTOR_CHUNK_SIZE=1024  # Must be > metadata size
 RAPTOR_TOP_K=10
 ```
 CLI: `raptor` to build index, `@raptor <query>` to search.
@@ -240,12 +277,12 @@ gemini  # authenticate once
 
 Then set `LLM_BACKEND=cli` in your .env file.
 
-## Default Configuration
+## Default Configuration (v1.3.0)
 - LLM: `gemini-3-flash-preview` (backend: `api`)
 - Embeddings: `voyage-3.5-lite` (200M free tokens/month)
-- Reranker: `rerank-2.5`
+- Reranker: `rerank-2.5` (200M free tokens/month)
 - Chunk size: 512 tokens, overlap: 75
-- Retrieval: top_k=75 → rerank to top_n=10
+- Retrieval: top_k=75 → rerank to top_n=100 (UI controls display count)
 - Similarity threshold: 0.3 (only applied when no reranker is configured)
 
 ## Obsidian URI Links
@@ -282,11 +319,57 @@ python -m evaluation --dataset tests/evaluation_dataset.json
 # Metrics: faithfulness, answer_relevancy, context_precision, context_recall
 ```
 
+## Web Search Integration
+Enable real-time web search to augment vault knowledge:
+```bash
+WEB_SEARCH_ENABLED=true
+WEB_SEARCH_WEIGHT=0.7  # Score multiplier vs vault (vault=1.0)
+WEB_SEARCH_MAX_RESULTS=5
+WEB_SEARCH_IN_RESEARCH=true  # Include in research mode
+```
+Requires Tavily API key (set in environment).
+
+## Query History
+Query history is automatically saved to `data/query_history.json`:
+- Browse past queries in web UI sidebar
+- Re-run previous queries with one click
+- History persists across sessions
+
+## Key Source Files
+| File | Purpose |
+|------|---------|
+| `main.py` | CLI orchestrator, `UltraRAG` class |
+| `app.py` | Streamlit web interface |
+| `config.py` | Pydantic configuration models |
+| `loader.py` | Obsidian vault parsing |
+| `chunking.py` | Document chunking strategies |
+| `embeddings.py` | Embedding model wrappers |
+| `vector_store.py` | LanceDB/Qdrant integration |
+| `query_engine.py` | RAG/Hybrid query engines |
+| `query_transform.py` | HyDE/multi-query expansion |
+| `self_correction.py` | Self-RAG/CRAG patterns |
+| `research_mode.py` | Iterative research retrieval |
+| `federated_query.py` | Multi-index federated search |
+| `raptor_index.py` | RAPTOR hierarchical summaries |
+| `tracked_llm.py` | LLM wrapper with token tracking |
+| `llm_token_tracker.py` | Cost tracking and reporting |
+| `token_tracker.py` | Voyage API token tracking |
+| `settings_store.py` | Persistent settings (exclusions) |
+| `exclusion_matcher.py` | File exclusion pattern matching |
+
 ## Documentation
 Extended documentation is in `docs/`:
+- `docs/QUICKSTART.md` - Getting started guide
 - `docs/ARCHITECTURE.md` - System diagrams and data flow
 - `docs/EVALUATION.md` - RAGAS evaluation setup and usage
+- `docs/TESTING.md` - Test suite guide
 - `docs/features/` - Feature guides:
+  - `LATE_CHUNKING.md` - Document-aware embeddings
+  - `QUERY_TRANSFORMATION.md` - HyDE and multi-query
+  - `SELF_CORRECTION.md` - Self-RAG/CRAG patterns
+  - `GRAPH_RETRIEVAL.md` - Wikilink graph expansion
+  - `CONTEXTUAL_RETRIEVAL.md` - LLM-enhanced context (opt-in)
   - `FILE_EXCLUSIONS.md` - File/folder exclusion patterns
-  - `RESEARCH_MODE_ENHANCEMENTS.md` - Exhaustive queries, dual-model architecture, progressive retry
+  - `RESEARCH_MODE_ENHANCEMENTS.md` - Exhaustive queries, dual-model architecture
   - `QUERY_INTENT_CLASSIFICATION.md` - Future: LLM-based query classification
+- `docs/reference/RAG_STRATEGY.md` - Original planning document (historical)

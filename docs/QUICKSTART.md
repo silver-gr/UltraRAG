@@ -36,7 +36,7 @@ VOYAGE_API_KEY=pa-xxx...  # Get from https://www.voyageai.com/
 GOOGLE_API_KEY=AIza...    # Get from https://makersuite.google.com/
 
 # OPTIONAL: Customize settings (defaults are optimized)
-EMBEDDING_MODEL=voyage-3-large
+EMBEDDING_MODEL=voyage-3.5-lite
 CHUNK_SIZE=512
 TOP_K=75
 ```
@@ -47,7 +47,7 @@ TOP_K=75
 1. Go to https://www.voyageai.com/
 2. Sign up for free account
 3. Get API key from dashboard
-4. Free tier: $200 credits (~5-10M tokens)
+4. Free tier: 200M tokens/month (embeddings + reranking)
 
 #### Google AI Studio (Required for LLM)
 1. Go to https://makersuite.google.com/
@@ -97,17 +97,17 @@ Show me notes tagged with #important
 
 ## 🎛️ Configuration Options
 
-### Budget-Conscious Setup (Free)
+### Default Setup (Recommended)
 ```bash
-# Use Gemini for everything (free tier)
-EMBEDDING_MODEL=gemini-embed
+# Best value with free tier (200M tokens/month)
+EMBEDDING_MODEL=voyage-3.5-lite
+VOYAGE_API_KEY=your_key
 GOOGLE_API_KEY=your_key
-# No VOYAGE_API_KEY needed
 ```
 
-### Maximum Quality Setup (Recommended)
+### Maximum Quality Setup
 ```bash
-# Best embeddings + reranking
+# Highest quality embeddings (paid)
 EMBEDDING_MODEL=voyage-3-large
 VOYAGE_API_KEY=your_key
 GOOGLE_API_KEY=your_key
@@ -117,7 +117,7 @@ GOOGLE_API_KEY=your_key
 ```bash
 # Requires GPU with 16-32GB VRAM
 EMBEDDING_MODEL=qwen3-8b
-# No API keys needed
+GOOGLE_API_KEY=your_key  # Still needed for Gemini LLM
 ```
 
 ## 📊 What to Expect
@@ -160,7 +160,8 @@ EMBEDDING_MODEL=qwen3-8b
 1. **Try different queries** - Explore your knowledge base
 2. **Read the README.md** - Learn about advanced features
 3. **Customize settings** - Tune for your specific needs
-4. **Phase 2 features** - Graph search, temporal filtering (coming soon)
+4. **Try Research Mode** - Use `@research <query>` for complex questions
+5. **Enable RAPTOR** - Hierarchical summaries for multi-document reasoning
 
 ## 🆘 Need Help?
 

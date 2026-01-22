@@ -40,10 +40,12 @@ ObsidianChunker(
     config: EmbeddingConfig,
     embed_model: BaseEmbedding,
     strategy: str = "obsidian_aware",
-    use_contextual_retrieval: bool = True,  # NEW: Enable/disable contextual retrieval
-    llm: Optional[LLM] = None                # NEW: LLM for generating context
+    use_contextual_retrieval: bool = False,  # Disabled by default (costs LLM tokens per chunk!)
+    llm: Optional[LLM] = None                # LLM for generating context
 )
 ```
+
+> **Note:** Contextual retrieval is disabled by default because it requires an LLM call for every chunk during indexing, significantly increasing API costs. Enable only when retrieval quality is critical.
 
 #### 2. Core Method: `_add_contextual_retrieval`
 
@@ -152,22 +154,27 @@ Each enhanced node includes:
 
 ## Usage
 
-### Enable (Default)
+### Enable (Opt-in)
 ```python
 chunker = ObsidianChunker(
     config=config,
     embed_model=embed_model,
-    use_contextual_retrieval=True,  # Enabled by default
+    use_contextual_retrieval=True,  # Enable contextual retrieval (costs tokens!)
     llm=llm
 )
 ```
 
-### Disable
+Or via environment variable:
+```bash
+USE_CONTEXTUAL_RETRIEVAL=true
+```
+
+### Disable (Default)
 ```python
 chunker = ObsidianChunker(
     config=config,
     embed_model=embed_model,
-    use_contextual_retrieval=False,  # Disable contextual retrieval
+    use_contextual_retrieval=False,  # Default - no extra LLM costs
     llm=None  # LLM not needed if disabled
 )
 ```

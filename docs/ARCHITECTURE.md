@@ -84,9 +84,9 @@
                     ▼
            ┌────────────────────────┐
            │  Embedding Model       │
-           │  Voyage-3-large OR     │
-           │  Qwen3-8B OR           │
-           │  OpenAI-3-large        │
+           │  voyage-3.5-lite OR    │
+           │  voyage-3-large OR     │
+           │  qwen3-8b              │
            └────────┬───────────────┘
                     │
                     ▼
@@ -159,7 +159,7 @@
    │                         │
    │  ┌─────────────────┐    │
    │  │ Reranking       │    │
-   │  │ Voyage Rerank 2 │    │
+   │  │ Voyage rerank-2.5│   │
    │  └────────┬────────┘    │
    │           │              │
    │  ┌────────▼────────┐    │
@@ -243,7 +243,7 @@
        │
        ▼
 ┌──────────────┐
-│  Embeddings  │  1024-dim vectors (Voyage/Qwen)
+│  Embeddings  │  1024-dim vectors (voyage-3.5-lite default)
 └──────┬───────┘
        │
        ▼

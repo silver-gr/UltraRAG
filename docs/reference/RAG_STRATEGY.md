@@ -1,5 +1,22 @@
 # World-Class RAG Strategy for Personal Obsidian Vault
 
+> ⚠️ **Historical Document**
+>
+> This is the **original research and planning document** from November 2024 that guided UltraRAG's development. While the architectural principles remain valid, specific recommendations (model names, pricing, configurations) may be outdated.
+>
+> **For current configuration, see:**
+> - [CLAUDE.md](../../CLAUDE.md) - Current defaults and usage
+> - [.env.example](../../.env.example) - Configuration reference
+> - [config.py](../../config.py) - Actual default values
+>
+> **Key differences from current implementation:**
+> - Default embedding: `voyage-3.5-lite` (not `voyage-3-large`)
+> - Default reranker: `rerank-2.5` (not `voyage-rerank-2`)
+> - LLM: `gemini-3-flash-preview` (not `gemini-2.5-flash`)
+> - Neo4j: Deferred (using in-memory wikilink graph instead)
+
+---
+
 Your 1,650-note Obsidian vault demands a sophisticated retrieval system that captures semantic nuance, preserves knowledge graph relationships, and delivers deeply contextual answers. This research-backed strategy prioritizes retrieval quality over speed, leveraging the latest state-of-the-art techniques from 2024-2025.
 
 ## The fundamental challenge: your interconnected notes

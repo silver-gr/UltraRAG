@@ -256,10 +256,10 @@ To reduce costs while keeping self-correction:
 
 1. Use a smaller/cheaper LLM for grading and refinement:
    ```python
-   # Use Gemini Flash for grading, Opus for generation
+   # Use Gemini Flash for grading
    from llama_index.llms.google_genai import GoogleGenAI
 
-   grading_llm = GoogleGenAI(model="gemini-2.0-flash-exp")
+   grading_llm = GoogleGenAI(model="gemini-flash-latest")  # Lighter model for grading
    ```
 
 2. Reduce max_retries:
