@@ -52,6 +52,25 @@ def _slugify(text: str, max_length: int = 30) -> str:
     return slug[:max_length]
 
 
+def _make_serializable(obj: Any) -> Any:
+    """Recursively convert numpy/pandas types to native Python for JSON serialization."""
+    import numpy as np
+
+    if isinstance(obj, dict):
+        return {k: _make_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_make_serializable(x) for x in obj]
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.integer,)):
+        return int(obj)
+    elif isinstance(obj, (np.floating,)):
+        return float(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    return obj
+
+
 def _result_to_dict(result: Any) -> Dict[str, Any]:
     """Convert a ResearchResult object to a dict, excluding the embedding field.
 
@@ -83,7 +102,8 @@ def _result_to_dict(result: Any) -> Dict[str, Any]:
 
     # Remove the embedding field if present (large, not needed for storage)
     d.pop("embedding", None)
-    return d
+    # Convert numpy types to native Python for JSON serialization
+    return _make_serializable(d)
 
 
 def _get_internal_filepath(query: str, result_id: str) -> Path:
