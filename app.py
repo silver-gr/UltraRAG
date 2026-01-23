@@ -89,6 +89,10 @@ def filter_and_renumber_citations(answer: str, sources: list) -> tuple[str, list
 # Auto-load existing index on startup (skip manual button click)
 AUTOLOAD_INDEX = os.getenv("AUTOLOAD_INDEX", "true").lower() == "true"
 
+# Currency display settings (for cost display in euros)
+CURRENCY_EXCHANGE_RATE = float(os.getenv("CURRENCY_EXCHANGE_RATE", "0.8633"))  # 1 USD = X EUR
+VAT_RATE = float(os.getenv("VAT_RATE", "0.24"))  # VAT rate (0.24 = 24%)
+
 # Persistent query history file
 QUERY_HISTORY_FILE = Path("data/query_history.json")
 
@@ -173,7 +177,7 @@ def save_query_to_history(query: str, result: dict) -> None:
         json.dump({'queries': history}, f, ensure_ascii=False, indent=2)
 
 
-def clean_excerpt_for_display(text: str, max_chars: int = 500) -> str:
+def clean_excerpt_for_display(text: str, max_chars: int = 1500) -> str:
     """Clean and truncate excerpt for display.
 
     - Removes markdown headings (# ## ###)
@@ -360,6 +364,74 @@ st.set_page_config(
     page_icon="🧠",
     layout="wide"
 )
+
+# Custom CSS for UI refinements
+st.markdown("""
+<style>
+/* Search area - better spacing */
+div[data-testid="stHorizontalBlock"] {
+    gap: 0.5rem;
+    align-items: center;
+}
+
+/* Query history - datetime caption styling */
+.stSidebar [data-testid="stCaptionContainer"] {
+    margin-bottom: -0.5rem !important;
+    margin-top: 0.5rem !important;
+}
+
+/* Query history buttons - improved styling */
+.stSidebar button[kind="secondary"] {
+    text-align: left !important;
+    padding: 0.4rem 0.6rem !important;
+    line-height: 1.35 !important;
+    white-space: normal !important;
+    height: auto !important;
+    min-height: unset !important;
+    font-size: 0.8rem !important;
+}
+
+/* Sidebar section spacing */
+.stSidebar [data-testid="stVerticalBlockBorderWrapper"] {
+    margin-bottom: 0 !important;
+}
+
+/* Radio buttons - compact */
+div[data-testid="stRadio"] > div {
+    gap: 0.3rem !important;
+}
+
+div[data-testid="stRadio"] label {
+    padding: 0.2rem 0.4rem !important;
+    font-size: 0.85rem !important;
+}
+
+/* Checkbox labels - prevent wrapping */
+div[data-testid="stCheckbox"] label {
+    white-space: nowrap !important;
+    font-size: 0.85rem !important;
+}
+
+/* Search button - consistent height */
+button[kind="primary"] {
+    min-height: 2.4rem !important;
+}
+
+/* Main container - reduce top padding */
+.main .block-container {
+    padding-top: 2rem !important;
+}
+
+/* Selectbox in search row - smaller */
+div[data-testid="stSelectbox"] {
+    min-width: 70px !important;
+}
+
+div[data-testid="stSelectbox"] label {
+    display: none !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # PWA (Progressive Web App) - inject into parent document head
 # components.html runs in sandboxed iframe, so we use parent.document to escape
@@ -570,59 +642,95 @@ def settings_dialog():
 
 @st.dialog("LLM Token Usage & Costs", width="large")
 def llm_usage_dialog():
-    """Dialog showing daily LLM token usage and costs."""
+    """Dialog showing daily LLM token usage and costs in EUR with VAT."""
     tracker = get_llm_tracker()
     stats = tracker.get_total_stats()
-    daily_data = tracker.get_usage_table(limit=30)
+
+    # Convert costs to EUR
+    total_cost_eur = stats['total_cost'] * CURRENCY_EXCHANGE_RATE
+    total_vat = total_cost_eur * VAT_RATE
+    total_with_vat = total_cost_eur + total_vat
 
     # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.metric("Total Tokens", f"{stats['total_tokens']:,}")
     with col2:
-        st.metric("Total Cost", f"${stats['total_cost']:.4f}")
+        st.metric("Cost (EUR)", f"€{total_cost_eur:.4f}")
     with col3:
-        st.metric("Requests", f"{stats['total_requests']:,}")
+        st.metric("VAT (24%)", f"€{total_vat:.4f}")
     with col4:
-        st.metric("Days Tracked", stats['days_tracked'])
+        st.metric("Total + VAT", f"€{total_with_vat:.4f}")
+    with col5:
+        st.metric("Days", stats['days_tracked'])
 
     st.divider()
 
-    # Daily breakdown table
+    # Daily breakdown table with EUR and VAT
     st.subheader("Daily Breakdown")
 
-    if daily_data:
+    # Get raw daily usage and convert to EUR with VAT
+    daily_usage = tracker.get_all_daily_usage()[:30]
+
+    if daily_usage:
         import pandas as pd
-        df = pd.DataFrame(daily_data)
+
+        # Build table data with EUR conversion and VAT
+        table_data = []
+        for usage in daily_usage:
+            cost_eur = usage.total_cost * CURRENCY_EXCHANGE_RATE
+            vat = cost_eur * VAT_RATE
+            total_vat = cost_eur + vat
+
+            table_data.append({
+                'Date': usage.date,
+                'Input Tokens': f"{usage.input_tokens:,}",
+                'Output Tokens': f"{usage.output_tokens:,}",
+                'Requests': usage.requests,
+                'Cost €': f"€{cost_eur:.4f}",
+                'VAT €': f"€{vat:.4f}",
+                'Total+VAT': f"€{total_vat:.4f}",
+            })
+
+        df = pd.DataFrame(table_data)
         st.dataframe(
             df,
             use_container_width=True,
             hide_index=True,
             column_config={
                 "Date": st.column_config.TextColumn("Date", width="small"),
-                "Input Tokens": st.column_config.TextColumn("Input Tokens", width="small"),
-                "Output Tokens": st.column_config.TextColumn("Output Tokens", width="small"),
-                "Total Tokens": st.column_config.TextColumn("Total Tokens", width="small"),
-                "Requests": st.column_config.NumberColumn("Requests", width="small"),
-                "Input Cost": st.column_config.TextColumn("Input $", width="small"),
-                "Output Cost": st.column_config.TextColumn("Output $", width="small"),
-                "Total Cost": st.column_config.TextColumn("Total $", width="small"),
+                "Input Tokens": st.column_config.TextColumn("Input", width="small"),
+                "Output Tokens": st.column_config.TextColumn("Output", width="small"),
+                "Requests": st.column_config.NumberColumn("Req", width="small"),
+                "Cost €": st.column_config.TextColumn("Cost €", width="small"),
+                "VAT €": st.column_config.TextColumn("VAT €", width="small"),
+                "Total+VAT": st.column_config.TextColumn("Total", width="small"),
             }
         )
     else:
         st.info("No usage data recorded yet. Token tracking starts when you make queries.")
 
-    # Pricing info
-    with st.expander("Gemini Pricing Reference"):
-        st.markdown("""
-        | Model | Input ($/1M tokens) | Output ($/1M tokens) |
-        |-------|---------------------|----------------------|
-        | gemini-3-flash-preview | $0.50 | $3.00 |
-        | gemini-3-pro-preview | $2.00 | $12.00 |
-        | gemini-2.5-flash | $0.30 | $2.50 |
-        | gemini-flash-latest | $0.30 | $2.50 |
+    # Pricing info with EUR
+    with st.expander("Gemini Pricing Reference (EUR)"):
+        # Convert USD prices to EUR
+        flash_in = 0.50 * CURRENCY_EXCHANGE_RATE
+        flash_out = 3.00 * CURRENCY_EXCHANGE_RATE
+        pro_in = 2.00 * CURRENCY_EXCHANGE_RATE
+        pro_out = 12.00 * CURRENCY_EXCHANGE_RATE
+        flash25_in = 0.30 * CURRENCY_EXCHANGE_RATE
+        flash25_out = 2.50 * CURRENCY_EXCHANGE_RATE
 
-        *Note: Token counts are estimated when actual counts are unavailable.*
+        st.markdown(f"""
+        | Model | Input (€/1M tokens) | Output (€/1M tokens) |
+        |-------|---------------------|----------------------|
+        | gemini-3-flash-preview | €{flash_in:.2f} | €{flash_out:.2f} |
+        | gemini-3-pro-preview | €{pro_in:.2f} | €{pro_out:.2f} |
+        | gemini-2.5-flash | €{flash25_in:.2f} | €{flash25_out:.2f} |
+        | gemini-flash-latest | €{flash25_in:.2f} | €{flash25_out:.2f} |
+
+        *Exchange rate: 1 USD = {CURRENCY_EXCHANGE_RATE} EUR | VAT: {int(VAT_RATE * 100)}%*
+
+        *Token counts are estimated when actual counts are unavailable.*
         """)
 
     # Reset button (with confirmation)
@@ -831,8 +939,8 @@ def main():
         st.subheader("📜 Query History")
         persistent_history = load_query_history()
         if persistent_history:
-            # Show most recent 20 queries (reversed for newest first)
-            for entry in reversed(persistent_history[-20:]):
+            # Show most recent 15 queries (reversed for newest first)
+            for entry in reversed(persistent_history[-15:]):
                 # Parse timestamp for display
                 try:
                     ts = datetime.fromisoformat(entry['timestamp'])
@@ -840,13 +948,16 @@ def main():
                 except (KeyError, ValueError):
                     time_str = "Unknown"
 
-                # Truncate query for button label
-                query_short = entry['query'][:40] + '...' if len(entry['query']) > 40 else entry['query']
-                button_label = f"[{time_str}] {query_short}"
+                # Show datetime as small caption, query as button
+                # Truncate query at 80 chars (more room now without inline datetime)
+                query_short = entry['query'][:80] + '...' if len(entry['query']) > 80 else entry['query']
 
-                if st.button(button_label, key=f"hist_{entry.get('id', entry['timestamp'])}", use_container_width=True):
-                    st.session_state.loaded_history_result = entry
-                    st.rerun()
+                # Use container for visual grouping
+                with st.container():
+                    st.caption(f"🕐 {time_str}")
+                    if st.button(query_short, key=f"hist_{entry.get('id', entry['timestamp'])}", use_container_width=True):
+                        st.session_state.loaded_history_result = entry
+                        st.rerun()
         else:
             st.caption("No queries yet")
     
@@ -886,54 +997,64 @@ def main():
             max_chars=10000  # Security: Limit query length
         )
 
-        col1, col2, col3, col4, col5, col6 = st.columns([1, 2, 2, 1, 1, 1])
-        with col1:
+        # Search controls - Row 1: Button + Search type
+        row1_col1, row1_col2 = st.columns([1, 4])
+        with row1_col1:
             search_button = st.button("🔍 Search", type="primary", use_container_width=True)
-        with col2:
+        with row1_col2:
             search_type = st.radio(
                 "Search type:",
                 ["Full Answer", "Find Notes Only"],
                 horizontal=True,
                 label_visibility="collapsed"
             )
-        with col3:
-            # Search scope (only show if conversations indexed)
-            if st.session_state.conversations_indexed:
+
+        # Search controls - Row 2: Scope + Options
+        has_raptor = st.session_state.rag.raptor_index_exists() if st.session_state.rag else False
+
+        if st.session_state.conversations_indexed:
+            # With conversations: Scope + Research + RAPTOR + Max sources
+            row2_col1, row2_col2, row2_col3, row2_col4 = st.columns([3, 1, 1, 1])
+            with row2_col1:
                 search_scope = st.radio(
                     "Search scope:",
-                    ["📓 Vault Only", "💬 Conversations", "🔀 Both"],
+                    ["📓 Vault", "💬 Convos", "🔀 Both"],
                     horizontal=True,
                     label_visibility="collapsed",
                     index=2  # Default to "Both"
                 )
-            else:
-                search_scope = "📓 Vault Only"
-        with col4:
-            # Research mode toggle
+                # Map back to full names for consistency
+                scope_map = {"📓 Vault": "📓 Vault Only", "💬 Convos": "💬 Conversations", "🔀 Both": "🔀 Both"}
+                search_scope = scope_map.get(search_scope, search_scope)
+        else:
+            # Without conversations: Research + RAPTOR + Max sources
+            search_scope = "📓 Vault Only"
+            row2_col2, row2_col3, row2_col4 = st.columns([1, 1, 1])
+
+        with row2_col2:
             research_mode = st.checkbox(
                 "🔬 Research",
-                help="Multi-step retrieval with gap analysis. Use @all prefix for exhaustive search (e.g., '@all list all habits')",
+                help="Multi-step retrieval with gap analysis. Use @all prefix for exhaustive search.",
                 value=False
             )
-        with col5:
-            # RAPTOR mode toggle (only show if RAPTOR index exists)
-            has_raptor = st.session_state.rag.raptor_index_exists() if st.session_state.rag else False
+        with row2_col3:
             if has_raptor:
                 raptor_mode = st.checkbox(
                     "🌳 RAPTOR",
-                    help="Use hierarchical summaries for better multi-document reasoning",
+                    help="Use hierarchical summaries for multi-document reasoning",
                     value=False
                 )
             else:
                 raptor_mode = False
-        with col6:
-            # Max sources dropdown
+                st.empty()  # Placeholder to maintain layout
+        with row2_col4:
             max_sources_options = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 125, 150, 175, 200]
             max_sources = st.selectbox(
-                "Max sources",
+                "Sources",
                 options=max_sources_options,
                 index=0,  # Default to 10
-                help="Maximum number of sources to use for synthesis"
+                help="Maximum sources for synthesis",
+                label_visibility="collapsed"
             )
 
         # Display pending result (from rerun after save)

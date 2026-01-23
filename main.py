@@ -742,7 +742,7 @@ class UltraRAG:
                 'title': node.metadata.get('title', 'Unknown'),
                 'file': node.metadata.get('file_name', 'Unknown'),
                 'score': node.score,
-                'excerpt': node.text[:300] + "..." if len(node.text) > 300 else node.text,
+                'excerpt': node.text[:1500] + "..." if len(node.text) > 1500 else node.text,
                 'source_type': node.metadata.get('source_type', 'vault'),
                 'retrieval_source': node.metadata.get('retrieval_source', 'vault')
             })
@@ -1140,7 +1140,7 @@ class UltraRAG:
                         'title': metadata.get('title', 'Unknown'),
                         'file': metadata.get('file_path', metadata.get('file_name', 'Unknown')),
                         'score': node.score if hasattr(node, 'score') else 0.0,
-                        'excerpt': node_obj.text[:300] + "..." if len(node_obj.text) > 300 else node_obj.text,
+                        'excerpt': node_obj.text[:1500] + "..." if len(node_obj.text) > 1500 else node_obj.text,
                         'source_type': metadata.get('source_type', 'vault')
                     })
 
@@ -1376,7 +1376,7 @@ class UltraRAG:
                         'file': node.metadata.get('file_path', 'Unknown'),  # 'file' for UI consistency
                         'file_path': node.metadata.get('file_path', 'Unknown'),
                         'score': node.score or 0.0,
-                        'excerpt': node.node.text[:300] + "..." if len(node.node.text) > 300 else node.node.text,
+                        'excerpt': node.node.text[:1500] + "..." if len(node.node.text) > 1500 else node.node.text,
                         'source_type': node.metadata.get('source_type', 'vault')
                     })
                 result['sources'] = sources
@@ -1509,7 +1509,7 @@ class UltraRAG:
                             path=None,
                             url=node.node.metadata.get('url', ''),
                             relevance=weighted_score,
-                            snippet=node.node.text[:300] + "..." if len(node.node.text) > 300 else node.node.text,
+                            snippet=node.node.text[:1500] + "..." if len(node.node.text) > 1500 else node.node.text,
                             title=node.node.metadata.get('title', 'Web Result')
                         ))
                         web_count += 1
@@ -1837,7 +1837,7 @@ Answer:"""
                         'title': metadata.get('title', 'Summary'),
                         'file': metadata.get('file_path', 'RAPTOR Summary'),
                         'score': score,
-                        'excerpt': text[:300] + "..." if len(text) > 300 else text,
+                        'excerpt': text[:1500] + "..." if len(text) > 1500 else text,
                         'source_type': 'raptor'
                     })
                 result['sources'] = sources
