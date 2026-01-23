@@ -225,10 +225,24 @@ if "results" in st.session_state and st.session_state.results:
             if metadata:
                 meta_parts = []
                 for k, v in metadata.items():
-                    if v is not None and v != "" and v != []:
-                        if isinstance(v, list):
-                            v = ", ".join(str(x) for x in v[:5])
-                        meta_parts.append(f"**{k}:** {v}")
+                    if v is None:
+                        continue
+                    # Convert numpy/pandas types to native Python
+                    import numpy as np
+                    if isinstance(v, np.ndarray):
+                        v = v.tolist()
+                    elif isinstance(v, (np.integer,)):
+                        v = int(v)
+                    elif isinstance(v, (np.floating,)):
+                        v = float(v)
+                    # Skip empty values
+                    if isinstance(v, (list, tuple)):
+                        if len(v) == 0:
+                            continue
+                        v = ", ".join(str(x) for x in list(v)[:5])
+                    elif isinstance(v, str) and v == "":
+                        continue
+                    meta_parts.append(f"**{k}:** {v}")
                 if meta_parts:
                     st.markdown(" | ".join(meta_parts))
 
