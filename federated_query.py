@@ -97,7 +97,7 @@ class IndexSource:
     """Represents a source index in the federation."""
     name: str
     index: VectorStoreIndex
-    source_type: Literal["vault", "conversations", "web"]
+    source_type: Literal["vault", "conversations", "web", "saved_items"]
     weight: float = 1.0  # Score multiplier for this source
     nodes: Optional[List] = None  # For BM25 retriever
     wikilink_graph: Optional[Dict[str, List[str]]] = None
@@ -444,7 +444,7 @@ class FederatedQueryEngine:
         summary = {
             "total_nodes": len(nodes),
             "by_source": {},
-            "by_type": {"vault": 0, "conversations": 0, "web": 0}
+            "by_type": {"vault": 0, "conversations": 0, "web": 0, "saved_items": 0}
         }
 
         for node in nodes:

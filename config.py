@@ -221,6 +221,32 @@ class WebSearchConfig(BaseModel):
         return v
 
 
+class ContentResearchConfig(BaseModel):
+    """Content Research page configuration for multi-source federated search."""
+    vault_weight: float = Field(default=1.0)
+    conversations_weight: float = Field(default=0.7)
+    saved_items_weight: float = Field(default=0.5)
+    top_k: int = Field(default=30)
+    threshold: float = Field(default=0.4)
+    dedup_similarity: float = Field(default=0.85)
+
+    @field_validator('vault_weight', 'conversations_weight', 'saved_items_weight')
+    @classmethod
+    def validate_source_weight(cls, v: float) -> float:
+        """Validate weight is between 0 and 2."""
+        if not 0 <= v <= 2:
+            raise ValueError(f"weight must be between 0 and 2, got {v}")
+        return v
+
+    @field_validator('dedup_similarity')
+    @classmethod
+    def validate_dedup_similarity(cls, v: float) -> float:
+        """Validate dedup similarity threshold."""
+        if not 0.5 <= v <= 1.0:
+            raise ValueError(f"dedup_similarity must be between 0.5 and 1.0, got {v}")
+        return v
+
+
 class RaptorConfig(BaseModel):
     """RAPTOR (Recursive Abstractive Processing for Tree-Organized Retrieval) configuration.
 
@@ -269,6 +295,7 @@ class RAGConfig(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     conversations: ConversationsConfig = Field(default_factory=ConversationsConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
+    content_research: ContentResearchConfig = Field(default_factory=ContentResearchConfig)
     raptor: RaptorConfig = Field(default_factory=RaptorConfig)
 
     # Indexing options
@@ -419,6 +446,14 @@ def load_config() -> RAGConfig:
             weight=float(os.getenv("WEB_SEARCH_WEIGHT", "0.7")),
             max_results=int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5")),
             include_in_research=os.getenv("WEB_SEARCH_IN_RESEARCH", "true").lower() == "true"
+        ),
+        content_research=ContentResearchConfig(
+            vault_weight=float(os.getenv("CONTENT_RESEARCH_VAULT_WEIGHT", "1.0")),
+            conversations_weight=float(os.getenv("CONTENT_RESEARCH_CONVERSATIONS_WEIGHT", "0.7")),
+            saved_items_weight=float(os.getenv("CONTENT_RESEARCH_SAVED_ITEMS_WEIGHT", "0.5")),
+            top_k=int(os.getenv("CONTENT_RESEARCH_TOP_K", "30")),
+            threshold=float(os.getenv("CONTENT_RESEARCH_THRESHOLD", "0.4")),
+            dedup_similarity=float(os.getenv("CONTENT_RESEARCH_DEDUP_SIMILARITY", "0.85")),
         ),
         raptor=RaptorConfig(
             enabled=os.getenv("ENABLE_RAPTOR", "false").lower() == "true",
