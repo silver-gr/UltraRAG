@@ -24,6 +24,48 @@ except ImportError:
     BM25_AVAILABLE = False
     logger.warning("BM25Retriever not available. Install with: pip install llama-index-retrievers-bm25")
 
+try:
+    import Stemmer as PyStemmer
+    PYSTEMMER_AVAILABLE = True
+except ImportError:
+    PYSTEMMER_AVAILABLE = False
+    logger.warning("PyStemmer not available. Install with: pip install PyStemmer")
+
+
+class BilingualStemmer:
+    """Bilingual stemmer for Greek/English text using PyStemmer (Snowball).
+
+    Routes tokens to the appropriate language stemmer based on Unicode
+    character detection. Greek characters (U+0370-U+03FF, U+1F00-U+1FFF)
+    are stemmed with the Greek Snowball stemmer; all others use English.
+    """
+
+    def __init__(self):
+        if not PYSTEMMER_AVAILABLE:
+            raise ImportError("PyStemmer is required for bilingual stemming")
+        self._greek = PyStemmer.Stemmer('greek')
+        self._english = PyStemmer.Stemmer('english')
+
+    def _is_greek(self, word: str) -> bool:
+        """Detect if a word contains Greek characters."""
+        return any('\u0370' <= c <= '\u03FF' or '\u1F00' <= c <= '\u1FFF' for c in word)
+
+    def stemWord(self, word: str) -> str:
+        """Stem a single word using the appropriate language stemmer."""
+        if self._is_greek(word):
+            return self._greek.stemWord(word)
+        return self._english.stemWord(word)
+
+    def stemWords(self, words: list) -> list:
+        """Stem a list of words, routing each to the correct language stemmer."""
+        result = []
+        for word in words:
+            if self._is_greek(word):
+                result.append(self._greek.stemWord(word))
+            else:
+                result.append(self._english.stemWord(word))
+        return result
+
 
 # Import additional dependencies for caching
 import hashlib
@@ -752,12 +794,21 @@ class HybridQueryEngine:
         # Build BM25 retriever if needed
         if self.bm25_retriever is None and BM25_AVAILABLE and self.nodes:
             try:
+                # Use bilingual stemmer for Greek/English vault content
+                stemmer = None
+                if PYSTEMMER_AVAILABLE:
+                    stemmer = BilingualStemmer()
+                    logger.info("BM25: Using bilingual stemmer (Greek + English)")
+                else:
+                    logger.info("BM25: PyStemmer not available, using default tokenization")
+
                 logger.info("Building BM25 retriever from nodes...")
                 self.bm25_retriever = BM25Retriever.from_defaults(
                     nodes=self.nodes,
+                    stemmer=stemmer,
                     similarity_top_k=self.config.retrieval.top_k
                 )
-                logger.info(f"BM25 retriever initialized with {len(self.nodes)} nodes")
+                logger.info(f"BM25 retriever initialized with {len(self.nodes)} nodes (bilingual stemming: {stemmer is not None})")
             except Exception as e:
                 logger.warning(f"Failed to build BM25 retriever: {e}")
                 self.bm25_retriever = None

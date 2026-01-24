@@ -69,7 +69,7 @@ class VoyageTokenTracker:
                     data = json.load(f)
 
                 self.embedding_usage = TokenUsage(
-                    model=data.get('embedding', {}).get('model', 'voyage-3.5-lite'),
+                    model=data.get('embedding', {}).get('model', 'voyage-4-lite'),
                     tokens_used=data.get('embedding', {}).get('tokens_used', 0),
                     token_limit=self.embedding_limit,
                     requests_count=data.get('embedding', {}).get('requests_count', 0),
@@ -99,7 +99,7 @@ class VoyageTokenTracker:
     def _init_fresh(self) -> None:
         """Initialize fresh usage tracking."""
         self.embedding_usage = TokenUsage(
-            model='voyage-3.5-lite',
+            model='voyage-4-lite',
             token_limit=self.embedding_limit
         )
         self.rerank_usage = TokenUsage(

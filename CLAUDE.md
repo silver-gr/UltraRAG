@@ -144,12 +144,13 @@ Research mode uses two different models to optimize for speed and reduce rate li
 
 | Function | Model | Purpose |
 |----------|-------|---------|
-| Gap Analysis | `gemini-flash-latest` (Gemini 2.5 Flash) | Fast, lightweight analysis with AFC disabled |
+| Gap Analysis | `gemini-3-flash-preview` | Fast analysis with AFC disabled |
 | Sub-query Generation | `gemini-3-flash-preview` | Main LLM for quality query generation |
 | Final Synthesis | `gemini-3-flash-preview` | Main LLM for comprehensive output |
 
 - Gap analysis LLM has AFC (Automatic Function Calling) disabled to prevent rate limiting
-- 5-second delay between iterations to spread API calls
+- **Convergence detection**: Stops when information gain drops below 5% (new unique nodes / total nodes)
+- **Context caching**: Gemini context cache reduces cost when accumulated context exceeds 32K tokens
 - Progressive retry on MAX_TOKENS: 100% → 80% → 66% → 300 nodes
 - See `docs/features/RESEARCH_MODE_ENHANCEMENTS.md` for full documentation
 
@@ -277,9 +278,9 @@ gemini  # authenticate once
 
 Then set `LLM_BACKEND=cli` in your .env file.
 
-## Default Configuration (v1.3.0)
-- LLM: `gemini-3-flash-preview` (backend: `api`)
-- Embeddings: `voyage-3.5-lite` (200M free tokens/month)
+## Default Configuration (v1.4.0)
+- LLM: `gemini-3-flash-preview` (backend: `api`, context caching enabled)
+- Embeddings: `voyage-4-lite` (200M free tokens, shared embedding space with voyage-4-large)
 - Reranker: `rerank-2.5` (200M free tokens/month)
 - Chunk size: 512 tokens, overlap: 75
 - Retrieval: top_k=75 → rerank to top_n=100 (UI controls display count)
@@ -345,10 +346,11 @@ Query history is automatically saved to `data/query_history.json`:
 | `chunking.py` | Document chunking strategies |
 | `embeddings.py` | Embedding model wrappers |
 | `vector_store.py` | LanceDB/Qdrant integration |
-| `query_engine.py` | RAG/Hybrid query engines |
+| `query_engine.py` | RAG/Hybrid query engines, BilingualStemmer (Greek/English BM25) |
 | `query_transform.py` | HyDE/multi-query expansion |
 | `self_correction.py` | Self-RAG/CRAG patterns |
-| `research_mode.py` | Iterative research retrieval |
+| `research_mode.py` | Iterative research retrieval with convergence detection |
+| `context_cache.py` | Gemini context caching for research mode |
 | `federated_query.py` | Multi-index federated search |
 | `raptor_index.py` | RAPTOR hierarchical summaries |
 | `tracked_llm.py` | LLM wrapper with token tracking |

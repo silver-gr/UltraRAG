@@ -149,6 +149,11 @@ class ResearchRetriever:
     # Model for gap analysis (same as main LLM for consistency)
     GAP_ANALYSIS_MODEL = "gemini-3-flash-preview"
 
+    # Convergence detection: stop when information gain drops below threshold
+    # Information gain = (new unique nodes this iteration) / (total unique nodes so far)
+    CONVERGENCE_THRESHOLD = 0.05  # Stop when < 5% new content added
+    CONVERGENCE_MIN_ITERATIONS = 2  # Don't check convergence before iteration 2
+
     def __init__(
         self,
         base_retriever: BaseRetriever,
@@ -174,6 +179,9 @@ class ResearchRetriever:
         self.confidence_threshold = confidence_threshold
         self.max_subqueries = max_subqueries
         self.enable_research = enable_research
+
+        # Context cache for reducing cost on repeated LLM calls
+        self._context_cache = None
 
         # Create lightweight LLM for gap analysis (reduces rate limiting)
         self.gap_analysis_llm = self._create_gap_analysis_llm()
@@ -292,6 +300,7 @@ class ResearchRetriever:
         retrieved_paths: Set[str] = set()
 
         current_query = query
+        previous_total_nodes = 0  # For convergence detection
 
         for iteration_num in range(1, effective_max_iterations + 1):
             # Add delay between iterations to avoid rate limiting (skip first iteration)
@@ -307,6 +316,9 @@ class ResearchRetriever:
             nodes = self.base_retriever.retrieve(query_bundle)
 
             logger.info(f"Iteration {iteration_num}: Retrieved {len(nodes)} nodes")
+
+            # Track node count before adding new ones (for convergence)
+            nodes_before = len(all_nodes)
 
             # Add to deduplication tracking
             for node in nodes:
@@ -326,6 +338,44 @@ class ResearchRetriever:
                 # Track file paths
                 if file_path:
                     retrieved_paths.add(file_path)
+
+            # Convergence detection: measure information gain
+            new_unique_nodes = len(all_nodes) - nodes_before
+            total_nodes_now = len(all_nodes)
+            information_gain = new_unique_nodes / max(total_nodes_now, 1)
+
+            logger.info(
+                f"Convergence: +{new_unique_nodes} new nodes, "
+                f"total={total_nodes_now}, gain={information_gain:.2%}"
+            )
+
+            # Check convergence (skip for first iterations and exhaustive queries)
+            if (iteration_num >= self.CONVERGENCE_MIN_ITERATIONS
+                    and information_gain < self.CONVERGENCE_THRESHOLD
+                    and not is_exhaustive):
+                logger.info(
+                    f"Convergence detected: information gain {information_gain:.2%} "
+                    f"< threshold {self.CONVERGENCE_THRESHOLD:.0%}. Stopping research."
+                )
+                # Still do gap analysis for this iteration's record
+                gaps, confidence, full_analysis = self._analyze_gaps(
+                    query, list(all_nodes.values()), is_exhaustive=is_exhaustive
+                )
+                iteration_result = ResearchIteration(
+                    iteration=iteration_num,
+                    query=current_query,
+                    nodes=nodes,
+                    gaps_identified=f"Converged (gain={information_gain:.2%})",
+                    confidence_score=max(confidence, self.confidence_threshold),
+                    full_analysis=full_analysis
+                )
+                iterations.append(iteration_result)
+                break
+
+            # Try to create/update context cache for cost reduction
+            # (only creates if accumulated context exceeds 32K tokens)
+            if iteration_num >= 2:
+                self._try_create_context_cache(list(all_nodes.values()), query)
 
             # Analyze gaps and compute confidence
             gaps, confidence, full_analysis = self._analyze_gaps(
@@ -405,6 +455,9 @@ class ResearchRetriever:
             final_confidence=final_confidence
         )
 
+        # Cleanup context cache
+        self._cleanup_context_cache()
+
         logger.info(
             f"Research completed: {result.total_iterations} iterations, "
             f"{result.total_nodes_retrieved} unique nodes, "
@@ -412,6 +465,63 @@ class ResearchRetriever:
         )
 
         return result
+
+    def _try_create_context_cache(self, nodes: List[NodeWithScore], query: str) -> None:
+        """Try to create/update a context cache for gap analysis calls.
+
+        Creates a Gemini context cache if accumulated content exceeds 32K tokens.
+        This reduces cost for subsequent gap analysis and sub-query generation calls.
+        """
+        try:
+            from context_cache import GeminiContextCache, MIN_CACHE_TOKENS
+
+            # Build the full context from all nodes
+            context_chunks = []
+            for idx, node in enumerate(nodes, 1):
+                title = node.metadata.get('title', 'Unknown')
+                file_path = node.metadata.get('file_path', '')
+                context_chunks.append(f"[Source {idx}: {title}]\nPath: {file_path}\n{node.node.text}")
+
+            context = "\n\n".join(context_chunks)
+            estimated_tokens = len(context) // 4
+
+            if estimated_tokens < MIN_CACHE_TOKENS:
+                return
+
+            # Create or update cache
+            if self._context_cache is None:
+                self._context_cache = GeminiContextCache(
+                    model=self.GAP_ANALYSIS_MODEL,
+                    ttl="300s"  # 5 minutes for research session
+                )
+
+            system_instruction = (
+                "You are a research assistant analyzing retrieved information from a knowledge base. "
+                f"The user's research query is: {query}\n\n"
+                "Below is the accumulated retrieved context from the knowledge base:\n\n"
+                f"{context}"
+            )
+
+            success = self._context_cache.create_cache(
+                context_text=system_instruction,
+                system_instruction="Analyze the provided context and respond precisely to the user's questions about gaps, confidence, and sub-queries.",
+                display_name=f"ultrarag_research_{hash(query) % 10000}"
+            )
+
+            if success:
+                logger.info(f"Context cache active: ~{estimated_tokens:,} tokens cached")
+
+        except ImportError:
+            logger.debug("context_cache module not available, skipping caching")
+        except Exception as e:
+            logger.debug(f"Context cache creation failed: {e}")
+
+    def _cleanup_context_cache(self) -> None:
+        """Delete the context cache after research completes."""
+        if self._context_cache and self._context_cache.is_active:
+            self._context_cache.delete_cache()
+            logger.info("Context cache cleaned up")
+        self._context_cache = None
 
     def _analyze_gaps(
         self,
@@ -455,12 +565,10 @@ IMPORTANT: This is an EXHAUSTIVE query - the user wants ALL/EVERY matching item.
 
 """
 
-        prompt = f"""Analyze whether the retrieved information fully answers the user's query.
+        # Build the analysis question (sent to cache or as full prompt)
+        analysis_question = f"""Analyze whether the retrieved information fully answers the user's query.
 {exhaustive_note}
 Query: {query}
-
-Retrieved Information (top 20 chunks from knowledge base):
-{context}
 
 Evaluate:
 1. Does this information comprehensively answer the query?
@@ -477,12 +585,31 @@ Guidelines:
 - 0.5-0.7 = Partial answer, significant gaps
 - <0.5 = Insufficient or irrelevant information"""
 
+        # Try using context cache first (if active and context is cached)
+        result = None
+        if self._context_cache and self._context_cache.is_active:
+            result = self._context_cache.cached_complete(analysis_question)
+            if result:
+                logger.info("Gap analysis used context cache (reduced cost)")
+
+        # Fall back to full prompt if cache not used
+        if not result:
+            prompt = f"""{analysis_question}
+
+Retrieved Information (top 20 chunks from knowledge base):
+{context}"""
+
+            try:
+                import time
+                start_time = time.time()
+                result = self.gap_analysis_llm.complete(prompt).text.strip()
+                elapsed = time.time() - start_time
+                logger.info(f"Gap analysis LLM call took {elapsed:.1f}s (model: {self.GAP_ANALYSIS_MODEL})")
+            except Exception as e:
+                logger.error(f"Error during gap analysis: {e}", exc_info=True)
+                return "Analysis failed", 0.5, None
+
         try:
-            import time
-            start_time = time.time()
-            result = self.gap_analysis_llm.complete(prompt).text.strip()
-            elapsed = time.time() - start_time
-            logger.info(f"Gap analysis LLM call took {elapsed:.1f}s (model: {self.GAP_ANALYSIS_MODEL})")
             logger.info(f"Gap analysis LLM response:\n{result}")
 
             # Parse confidence score with robust regex matching

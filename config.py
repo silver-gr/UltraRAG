@@ -12,7 +12,7 @@ load_dotenv()
 
 class EmbeddingConfig(BaseModel):
     """Embedding model configuration."""
-    model: str = Field(default="voyage-3.5-lite")  # Free tier: 200M tokens
+    model: str = Field(default="voyage-4-lite")  # Free tier: 200M tokens (shared embedding space with voyage-4-large)
     dimension: int = Field(default=1024)
     chunk_size: int = Field(default=512)
     chunk_overlap: int = Field(default=75)

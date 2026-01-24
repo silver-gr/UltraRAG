@@ -62,7 +62,7 @@ class TestEmbeddingConfig:
     def test_default_values(self):
         """Test default configuration values."""
         config = EmbeddingConfig()
-        assert config.model == "voyage-3.5-lite"
+        assert config.model == "voyage-4-lite"
         assert config.dimension == 1024
         assert config.chunk_size == 512
         assert config.chunk_overlap == 75
