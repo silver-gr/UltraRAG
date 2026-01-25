@@ -361,7 +361,7 @@ def render_copy_buttons(clean_text: str, linked_text: str):
 # Page config
 st.set_page_config(
     page_title="UltraRAG - Obsidian Knowledge Assistant",
-    page_icon="🧠",
+    page_icon="40px.png",
     layout="wide"
 )
 

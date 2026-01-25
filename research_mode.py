@@ -7,7 +7,8 @@ Based on Khoj's research mode (141% accuracy improvement on benchmarks).
 import logging
 import re
 from typing import List, Optional, Set, Dict, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from llama_index.core.schema import NodeWithScore, QueryBundle
 from llama_index.core.retrievers import BaseRetriever
 
@@ -15,6 +16,83 @@ from llama_index.core.retrievers import BaseRetriever
 from observability import trace_chain, trace_span, is_tracing_enabled
 
 logger = logging.getLogger(__name__)
+
+
+class IndexProfile(Enum):
+    """Predefined convergence profiles for different index types."""
+    PERSONAL = "personal"      # Personal notes: aggressive convergence (quick answers)
+    RESEARCH = "research"      # Research content: conservative (comprehensive coverage)
+    BALANCED = "balanced"      # Default balanced approach
+
+
+@dataclass
+class ConvergenceConfig:
+    """Configuration for research mode convergence detection.
+    
+    Different profiles optimize for different use cases:
+    - PERSONAL: Quick answers from personal notes (aggressive stopping)
+    - RESEARCH: Comprehensive coverage for content creation (conservative stopping)
+    - BALANCED: Default middle-ground approach
+    """
+    # Information gain threshold (stop when new content % drops below)
+    info_gain_threshold: float = 0.08
+    
+    # Minimum iterations before checking convergence
+    min_iterations: int = 2
+    
+    # Score floor: stop if avg score of new nodes below this
+    score_floor: float = 0.25
+    
+    # Query similarity: stop if reformulated query too similar (word overlap)
+    query_similarity: float = 0.85
+    
+    # Redundancy: stop if this fraction of nodes are duplicates
+    redundancy_threshold: float = 0.60
+    
+    # Default max iterations
+    max_iterations: int = 3
+    
+    # Exhaustive mode max iterations
+    exhaustive_iterations: int = 5
+    
+    @classmethod
+    def for_profile(cls, profile: IndexProfile) -> "ConvergenceConfig":
+        """Get convergence config for a specific index profile."""
+        if profile == IndexProfile.PERSONAL:
+            return cls(
+                info_gain_threshold=0.10,   # Stop earlier (10%)
+                min_iterations=2,
+                score_floor=0.30,           # Higher quality bar
+                query_similarity=0.80,      # Stop if queries similar
+                redundancy_threshold=0.50,  # Less tolerance for duplicates
+                max_iterations=3,
+                exhaustive_iterations=4,
+            )
+        elif profile == IndexProfile.RESEARCH:
+            return cls(
+                info_gain_threshold=0.05,   # More iterations (5%)
+                min_iterations=2,
+                score_floor=0.20,           # Lower bar (diverse sources OK)
+                query_similarity=0.90,      # Allow more similar queries
+                redundancy_threshold=0.75,  # High tolerance (multiple perspectives OK)
+                max_iterations=4,
+                exhaustive_iterations=6,
+            )
+        else:  # BALANCED (default)
+            return cls(
+                info_gain_threshold=0.08,
+                min_iterations=2,
+                score_floor=0.25,
+                query_similarity=0.85,
+                redundancy_threshold=0.60,
+                max_iterations=3,
+                exhaustive_iterations=5,
+            )
+    
+    @classmethod
+    def default(cls) -> "ConvergenceConfig":
+        """Get default balanced configuration."""
+        return cls.for_profile(IndexProfile.BALANCED)
 
 
 @dataclass
@@ -139,9 +217,6 @@ class ResearchRetriever:
         r'\bπλήρης?\b',                # Greek: complete/full
     ]
 
-    # Maximum iterations for exhaustive queries (overrides config)
-    EXHAUSTIVE_MAX_ITERATIONS = 5
-
     # Delay between iterations to avoid rate limiting (seconds)
     # Set to 0 to disable rate limiting delays
     ITERATION_DELAY = 0
@@ -149,33 +224,40 @@ class ResearchRetriever:
     # Model for gap analysis (same as main LLM for consistency)
     GAP_ANALYSIS_MODEL = "gemini-3-flash-preview"
 
-    # Convergence detection: stop when information gain drops below threshold
-    # Information gain = (new unique nodes this iteration) / (total unique nodes so far)
-    CONVERGENCE_THRESHOLD = 0.05  # Stop when < 5% new content added
-    CONVERGENCE_MIN_ITERATIONS = 2  # Don't check convergence before iteration 2
-
     def __init__(
         self,
         base_retriever: BaseRetriever,
         llm,
-        max_iterations: int = 3,
+        max_iterations: int = None,
         confidence_threshold: float = 0.8,
         max_subqueries: int = 3,
-        enable_research: bool = True
+        enable_research: bool = True,
+        convergence_config: ConvergenceConfig = None,
+        index_profile: IndexProfile = None
     ):
         """Initialize research retriever.
 
         Args:
             base_retriever: Underlying retriever to use for each iteration
             llm: Language model for gap analysis and sub-query generation
-            max_iterations: Maximum research iterations (default: 3)
+            max_iterations: Maximum research iterations (overrides config if set)
             confidence_threshold: Stop if confidence exceeds this (default: 0.8)
             max_subqueries: Maximum sub-queries per iteration (default: 3)
             enable_research: Whether research mode is enabled (default: True)
+            convergence_config: Custom convergence settings (optional)
+            index_profile: Use preset profile (PERSONAL, RESEARCH, BALANCED)
         """
+        # Determine convergence config
+        if convergence_config:
+            self.config = convergence_config
+        elif index_profile:
+            self.config = ConvergenceConfig.for_profile(index_profile)
+        else:
+            self.config = ConvergenceConfig.default()
+
         self.base_retriever = base_retriever
         self.llm = llm
-        self.max_iterations = max_iterations
+        self.max_iterations = max_iterations or self.config.max_iterations
         self.confidence_threshold = confidence_threshold
         self.max_subqueries = max_subqueries
         self.enable_research = enable_research
@@ -188,10 +270,10 @@ class ResearchRetriever:
 
         logger.info(
             f"ResearchRetriever initialized "
-            f"(max_iterations={max_iterations}, "
-            f"confidence_threshold={confidence_threshold}, "
-            f"enabled={enable_research}, "
-            f"gap_analysis_model={self.GAP_ANALYSIS_MODEL})"
+            f"(max_iterations={self.max_iterations}, "
+            f"exhaustive_iterations={self.config.exhaustive_iterations}, "
+            f"info_gain_threshold={self.config.info_gain_threshold:.0%}, "
+            f"enabled={enable_research})"
         )
 
     def _create_gap_analysis_llm(self):
@@ -241,6 +323,155 @@ class ResearchRetriever:
                 return True
         return False
 
+    def _check_score_floor(self, new_nodes: List[NodeWithScore]) -> tuple[bool, float]:
+        """Check if new nodes have low average relevance scores.
+
+        Args:
+            new_nodes: Nodes retrieved in current iteration
+
+        Returns:
+            (should_stop, avg_score) - True if avg score below threshold
+        """
+        if not new_nodes:
+            return False, 0.0
+
+        scores = [n.score or 0.0 for n in new_nodes]
+        avg_score = sum(scores) / len(scores)
+        should_stop = avg_score < self.config.score_floor
+
+        if should_stop:
+            logger.info(f"Score floor check: avg={avg_score:.3f} < {self.config.score_floor}")
+
+        return should_stop, avg_score
+
+    def _check_query_similarity(self, new_query: str, previous_queries: List[str]) -> tuple[bool, float]:
+        """Check if new query is too similar to previous queries.
+
+        Uses word overlap ratio (Jaccard-like) for simplicity.
+
+        Args:
+            new_query: The reformulated query
+            previous_queries: List of queries from previous iterations
+
+        Returns:
+            (should_stop, max_similarity) - True if too similar to any previous
+        """
+        if not previous_queries:
+            return False, 0.0
+
+        def word_set(q: str) -> Set[str]:
+            # Normalize and tokenize
+            return set(re.findall(r'\w+', q.lower()))
+
+        new_words = word_set(new_query)
+        if not new_words:
+            return False, 0.0
+
+        max_similarity = 0.0
+        for prev_query in previous_queries:
+            prev_words = word_set(prev_query)
+            if not prev_words:
+                continue
+
+            # Jaccard similarity: intersection / union
+            intersection = len(new_words & prev_words)
+            union = len(new_words | prev_words)
+            similarity = intersection / union if union > 0 else 0.0
+            max_similarity = max(max_similarity, similarity)
+
+        should_stop = max_similarity >= self.config.query_similarity
+
+        if should_stop:
+            logger.info(f"Query similarity check: {max_similarity:.2%} >= {self.config.query_similarity:.0%}")
+
+        return should_stop, max_similarity
+
+    def _check_redundancy(self, nodes_before: int, nodes_after: int, retrieved_count: int) -> tuple[bool, float]:
+        """Check if too many retrieved nodes were duplicates.
+
+        Args:
+            nodes_before: Unique node count before this iteration
+            nodes_after: Unique node count after this iteration
+            retrieved_count: Total nodes retrieved this iteration
+
+        Returns:
+            (should_stop, redundancy_ratio) - True if high redundancy
+        """
+        if retrieved_count == 0:
+            return False, 0.0
+
+        new_unique = nodes_after - nodes_before
+        duplicates = retrieved_count - new_unique
+        redundancy_ratio = duplicates / retrieved_count
+
+        should_stop = redundancy_ratio >= self.config.redundancy_threshold
+
+        if should_stop:
+            logger.info(
+                f"Redundancy check: {redundancy_ratio:.0%} duplicates "
+                f"({duplicates}/{retrieved_count}) >= {self.config.redundancy_threshold:.0%}"
+            )
+
+        return should_stop, redundancy_ratio
+
+    def _check_convergence(
+        self,
+        iteration_num: int,
+        nodes: List[NodeWithScore],
+        all_nodes: Dict[str, NodeWithScore],
+        nodes_before: int,
+        current_query: str,
+        previous_queries: List[str],
+        is_exhaustive: bool
+    ) -> tuple[bool, str]:
+        """Check all convergence criteria.
+
+        Args:
+            iteration_num: Current iteration number
+            nodes: Nodes retrieved this iteration
+            all_nodes: All unique nodes so far
+            nodes_before: Unique node count before this iteration
+            current_query: Query used this iteration
+            previous_queries: Queries from previous iterations
+            is_exhaustive: Whether this is an exhaustive query
+
+        Returns:
+            (should_stop, reason) - True if any criterion met, with explanation
+        """
+        # Skip convergence checks for exhaustive queries
+        if is_exhaustive:
+            return False, ""
+
+        # Skip before minimum iterations
+        if iteration_num < self.config.min_iterations:
+            return False, ""
+
+        total_nodes_now = len(all_nodes)
+        new_unique_nodes = total_nodes_now - nodes_before
+
+        # 1. Information gain check (primary)
+        information_gain = new_unique_nodes / max(total_nodes_now, 1)
+        if information_gain < self.config.info_gain_threshold:
+            return True, f"info_gain={information_gain:.1%} < {self.config.info_gain_threshold:.0%}"
+
+        # 2. Score floor check (new nodes have low relevance)
+        score_stop, avg_score = self._check_score_floor(nodes)
+        if score_stop:
+            return True, f"avg_score={avg_score:.3f} < {self.config.score_floor}"
+
+        # 3. Query similarity check (query reformulation not adding new angles)
+        if current_query and previous_queries:
+            sim_stop, max_sim = self._check_query_similarity(current_query, previous_queries)
+            if sim_stop:
+                return True, f"query_similarity={max_sim:.0%} >= {self.config.query_similarity:.0%}"
+
+        # 4. Redundancy check (too many duplicates)
+        redundancy_stop, redundancy = self._check_redundancy(nodes_before, total_nodes_now, len(nodes))
+        if redundancy_stop:
+            return True, f"redundancy={redundancy:.0%} >= {self.config.redundancy_threshold:.0%}"
+
+        return False, ""
+
     @trace_chain
     def research(self, query: str, force_exhaustive: bool = False) -> ResearchResult:
         """Execute multi-step research process.
@@ -259,7 +490,7 @@ class ResearchRetriever:
         # Determine effective max iterations
         effective_max_iterations = self.max_iterations
         if is_exhaustive:
-            effective_max_iterations = self.EXHAUSTIVE_MAX_ITERATIONS
+            effective_max_iterations = self.config.exhaustive_iterations
             logger.info(
                 f"Exhaustive mode enabled: force={force_exhaustive}, "
                 f"auto_detect={self._is_exhaustive_query(query)}, "
@@ -299,8 +530,10 @@ class ResearchRetriever:
         # Track which file paths we've already retrieved from
         retrieved_paths: Set[str] = set()
 
+        # Track previous queries for similarity detection
+        previous_queries: List[str] = []
+
         current_query = query
-        previous_total_nodes = 0  # For convergence detection
 
         for iteration_num in range(1, effective_max_iterations + 1):
             # Add delay between iterations to avoid rate limiting (skip first iteration)
@@ -339,7 +572,7 @@ class ResearchRetriever:
                 if file_path:
                     retrieved_paths.add(file_path)
 
-            # Convergence detection: measure information gain
+            # Convergence detection: check all criteria
             new_unique_nodes = len(all_nodes) - nodes_before
             total_nodes_now = len(all_nodes)
             information_gain = new_unique_nodes / max(total_nodes_now, 1)
@@ -349,14 +582,19 @@ class ResearchRetriever:
                 f"total={total_nodes_now}, gain={information_gain:.2%}"
             )
 
-            # Check convergence (skip for first iterations and exhaustive queries)
-            if (iteration_num >= self.CONVERGENCE_MIN_ITERATIONS
-                    and information_gain < self.CONVERGENCE_THRESHOLD
-                    and not is_exhaustive):
-                logger.info(
-                    f"Convergence detected: information gain {information_gain:.2%} "
-                    f"< threshold {self.CONVERGENCE_THRESHOLD:.0%}. Stopping research."
-                )
+            # Check all convergence criteria
+            should_stop, stop_reason = self._check_convergence(
+                iteration_num=iteration_num,
+                nodes=nodes,
+                all_nodes=all_nodes,
+                nodes_before=nodes_before,
+                current_query=current_query,
+                previous_queries=previous_queries,
+                is_exhaustive=is_exhaustive
+            )
+
+            if should_stop:
+                logger.info(f"Convergence detected: {stop_reason}. Stopping research.")
                 # Still do gap analysis for this iteration's record
                 gaps, confidence, full_analysis = self._analyze_gaps(
                     query, list(all_nodes.values()), is_exhaustive=is_exhaustive
@@ -365,12 +603,15 @@ class ResearchRetriever:
                     iteration=iteration_num,
                     query=current_query,
                     nodes=nodes,
-                    gaps_identified=f"Converged (gain={information_gain:.2%})",
+                    gaps_identified=f"Converged ({stop_reason})",
                     confidence_score=max(confidence, self.confidence_threshold),
                     full_analysis=full_analysis
                 )
                 iterations.append(iteration_result)
                 break
+
+            # Track this query for similarity detection in next iteration
+            previous_queries.append(current_query)
 
             # Try to create/update context cache for cost reduction
             # (only creates if accumulated context exceeds 32K tokens)

@@ -9,8 +9,13 @@
   "orientation": "any",
   "icons": [
     {
+      "src": "/app/static/favicon-32.png",
+      "sizes": "35x35",
+      "type": "image/png"
+    },
+    {
       "src": "/app/static/icon-192.png",
-      "sizes": "192x192",
+      "sizes": "125x125",
       "type": "image/png",
       "purpose": "any maskable"
     },
