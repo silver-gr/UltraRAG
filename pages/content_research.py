@@ -139,11 +139,11 @@ if "results" in st.session_state and st.session_state.results:
     query_settings = st.session_state.get("query_settings", {})
 
     # Stats bar
-    sources_present = sorted(set(r.source if isinstance(r, ResearchResult)
+    sources_present = sorted(set(r.source if hasattr(r, 'source')
                                  else r.get("source", "?") for r in results))
     source_counts = {}
     for r in results:
-        src = r.source if isinstance(r, ResearchResult) else r.get("source", "?")
+        src = r.source if hasattr(r, 'source') else r.get("source", "?")
         source_counts[src] = source_counts.get(src, 0) + 1
 
     cols = st.columns([2, 1, 1, 1])
@@ -192,7 +192,7 @@ if "results" in st.session_state and st.session_state.results:
 
     def _display_result(r):
         """Display a single research result in an expander."""
-        if isinstance(r, ResearchResult):
+        if hasattr(r, 'source'):
             title = r.title
             score = r.weighted_score
             raw = r.raw_score
@@ -256,7 +256,7 @@ if "results" in st.session_state and st.session_state.results:
         with tabs[i + 1]:
             source_results = [
                 r for r in results
-                if (r.source if isinstance(r, ResearchResult)
+                if (r.source if hasattr(r, 'source')
                     else r.get("source")) == source
             ]
             for r in source_results:

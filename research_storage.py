@@ -389,11 +389,7 @@ def export_markdown(result_id: str) -> Optional[Path]:
 
             lines.append(f"### {i}. [{score:.2f}] {title}")
 
-            # Chunk preview (first 500 chars)
-            chunk_preview = chunk[:500]
-            if len(chunk) > 500:
-                chunk_preview += "..."
-            lines.append(f"> {chunk_preview}")
+            lines.append(f"> {chunk}")
             lines.append("")
 
             # Source-specific metadata

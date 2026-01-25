@@ -45,7 +45,7 @@ class TrackedVoyageEmbedding(BaseEmbedding):
             raise QuotaExhaustedError(msg)
 
         result = self._base._get_text_embedding(text)
-        self._tracker.record_embedding_usage(estimated_tokens, self._model_name)
+        self._tracker.record_embedding_usage(estimated_tokens, self._model_name, usage_type="index")
         return result
 
     def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -57,7 +57,7 @@ class TrackedVoyageEmbedding(BaseEmbedding):
             raise QuotaExhaustedError(msg)
 
         result = self._base._get_text_embeddings(texts)
-        self._tracker.record_embedding_usage(estimated_tokens, self._model_name)
+        self._tracker.record_embedding_usage(estimated_tokens, self._model_name, usage_type="index")
         return result
 
     async def _aget_text_embedding(self, text: str) -> List[float]:
@@ -72,7 +72,7 @@ class TrackedVoyageEmbedding(BaseEmbedding):
         async with _get_embedding_semaphore():
             result = await self._base._aget_text_embedding(text)
 
-        self._tracker.record_embedding_usage(estimated_tokens, self._model_name)
+        self._tracker.record_embedding_usage(estimated_tokens, self._model_name, usage_type="index")
         return result
 
     async def _aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -87,7 +87,7 @@ class TrackedVoyageEmbedding(BaseEmbedding):
         async with _get_embedding_semaphore():
             result = await self._base._aget_text_embeddings(texts)
 
-        self._tracker.record_embedding_usage(estimated_tokens, self._model_name)
+        self._tracker.record_embedding_usage(estimated_tokens, self._model_name, usage_type="index")
         return result
 
     def _get_query_embedding(self, query: str) -> List[float]:
@@ -99,7 +99,7 @@ class TrackedVoyageEmbedding(BaseEmbedding):
             raise QuotaExhaustedError(msg)
 
         result = self._base._get_query_embedding(query)
-        self._tracker.record_embedding_usage(estimated_tokens, self._model_name)
+        self._tracker.record_embedding_usage(estimated_tokens, self._model_name, usage_type="query")
         return result
 
     async def _aget_query_embedding(self, query: str) -> List[float]:
@@ -114,7 +114,7 @@ class TrackedVoyageEmbedding(BaseEmbedding):
         async with _get_embedding_semaphore():
             result = await self._base._aget_query_embedding(query)
 
-        self._tracker.record_embedding_usage(estimated_tokens, self._model_name)
+        self._tracker.record_embedding_usage(estimated_tokens, self._model_name, usage_type="query")
         return result
 
 

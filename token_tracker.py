@@ -6,7 +6,7 @@ import logging
 import threading
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Literal
 from dataclasses import dataclass, field, asdict
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,11 @@ class TokenUsage:
     token_limit: int = 200_000_000  # 200M default
     requests_count: int = 0
     last_updated: str = ""
+    # Separate tracking for index vs query
+    index_tokens: int = 0
+    query_tokens: int = 0
+    index_requests: int = 0
+    query_requests: int = 0
 
     @property
     def tokens_remaining(self) -> int:
@@ -51,6 +56,7 @@ class VoyageTokenTracker:
 
     embedding_usage: TokenUsage = field(default=None)
     rerank_usage: TokenUsage = field(default=None)
+    embedding_history: list = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def __post_init__(self):
@@ -68,12 +74,17 @@ class VoyageTokenTracker:
                 with open(self.storage_path, 'r') as f:
                     data = json.load(f)
 
+                emb_data = data.get('embedding', {})
                 self.embedding_usage = TokenUsage(
-                    model=data.get('embedding', {}).get('model', 'voyage-4-lite'),
-                    tokens_used=data.get('embedding', {}).get('tokens_used', 0),
+                    model=emb_data.get('model', 'voyage-4-lite'),
+                    tokens_used=emb_data.get('tokens_used', 0),
                     token_limit=self.embedding_limit,
-                    requests_count=data.get('embedding', {}).get('requests_count', 0),
-                    last_updated=data.get('embedding', {}).get('last_updated', '')
+                    requests_count=emb_data.get('requests_count', 0),
+                    last_updated=emb_data.get('last_updated', ''),
+                    index_tokens=emb_data.get('index_tokens', 0),
+                    query_tokens=emb_data.get('query_tokens', 0),
+                    index_requests=emb_data.get('index_requests', 0),
+                    query_requests=emb_data.get('query_requests', 0)
                 )
 
                 self.rerank_usage = TokenUsage(
@@ -83,6 +94,9 @@ class VoyageTokenTracker:
                     requests_count=data.get('rerank', {}).get('requests_count', 0),
                     last_updated=data.get('rerank', {}).get('last_updated', '')
                 )
+
+                # Load embedding history
+                self.embedding_history = data.get('embedding_history', [])
 
                 logger.info(
                     f"Loaded Voyage usage: Embeddings {self.embedding_usage.tokens_used:,}/{self.embedding_limit:,} "
@@ -106,6 +120,7 @@ class VoyageTokenTracker:
             model='voyage-rerank-2.5',
             token_limit=self.rerank_limit
         )
+        self.embedding_history = []
         logger.info("Initialized fresh Voyage token tracking")
 
     def _save_usage(self) -> None:
@@ -113,6 +128,7 @@ class VoyageTokenTracker:
         data = {
             'embedding': asdict(self.embedding_usage),
             'rerank': asdict(self.rerank_usage),
+            'embedding_history': self.embedding_history,
             'saved_at': datetime.now().isoformat()
         }
 
@@ -187,20 +203,66 @@ class VoyageTokenTracker:
 
             return True, "OK"
 
-    def record_embedding_usage(self, tokens: int, model: str = None) -> None:
-        """Record embedding token usage."""
+    def record_embedding_usage(self, tokens: int, model: str = None, usage_type: Literal["index", "query"] = "index") -> None:
+        """Record embedding token usage.
+        
+        Args:
+            tokens: Number of tokens used
+            model: Model name (if changed, archives old model to history)
+            usage_type: "index" for document indexing, "query" for search queries
+        """
         with self._lock:
+            # If model changed, archive the old model's usage to history
+            if model and model != self.embedding_usage.model:
+                self._archive_embedding_model()
+                self.embedding_usage.model = model
+                self.embedding_usage.tokens_used = 0
+                self.embedding_usage.requests_count = 0
+                self.embedding_usage.index_tokens = 0
+                self.embedding_usage.query_tokens = 0
+                self.embedding_usage.index_requests = 0
+                self.embedding_usage.query_requests = 0
+                logger.info(f"Switched embedding model to {model}, previous model archived to history")
+
             self.embedding_usage.tokens_used += tokens
             self.embedding_usage.requests_count += 1
             self.embedding_usage.last_updated = datetime.now().isoformat()
-            if model:
-                self.embedding_usage.model = model
+            
+            # Track by usage type
+            if usage_type == "index":
+                self.embedding_usage.index_tokens += tokens
+                self.embedding_usage.index_requests += 1
+            else:  # query
+                self.embedding_usage.query_tokens += tokens
+                self.embedding_usage.query_requests += 1
+            
             self._save_usage()
 
             logger.debug(
-                f"Recorded {tokens:,} embedding tokens. "
+                f"Recorded {tokens:,} embedding tokens ({usage_type}). "
                 f"Total: {self.embedding_usage.tokens_used:,}/{self.embedding_limit:,} "
                 f"({self.embedding_usage.usage_percent:.2f}%)"
+            )
+
+    def _archive_embedding_model(self) -> None:
+        """Archive current embedding model usage to history."""
+        if self.embedding_usage.tokens_used > 0:
+            self.embedding_history.append({
+                'model': self.embedding_usage.model,
+                'tokens_used': self.embedding_usage.tokens_used,
+                'requests_count': self.embedding_usage.requests_count,
+                'index_tokens': self.embedding_usage.index_tokens,
+                'query_tokens': self.embedding_usage.query_tokens,
+                'index_requests': self.embedding_usage.index_requests,
+                'query_requests': self.embedding_usage.query_requests,
+                'last_updated': self.embedding_usage.last_updated,
+                'archived_at': datetime.now().isoformat()
+            })
+            logger.info(
+                f"Archived {self.embedding_usage.model}: "
+                f"{self.embedding_usage.tokens_used:,} tokens "
+                f"(index: {self.embedding_usage.index_tokens:,}, query: {self.embedding_usage.query_tokens:,}), "
+                f"{self.embedding_usage.requests_count} requests"
             )
 
     def record_rerank_usage(self, tokens: int, model: str = None) -> None:

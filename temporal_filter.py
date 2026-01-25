@@ -93,10 +93,13 @@ class DateRange:
         if not self.is_active():
             return True
 
-        if self.start_date and date < self.start_date:
+        # Normalize to naive datetime for comparison (strip timezone if present)
+        cmp_date = date.replace(tzinfo=None) if hasattr(date, 'tzinfo') and date.tzinfo else date
+
+        if self.start_date and cmp_date < self.start_date:
             return False
 
-        if self.end_date and date > self.end_date:
+        if self.end_date and cmp_date > self.end_date:
             return False
 
         return True
