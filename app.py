@@ -401,12 +401,18 @@ st.markdown("""
 }
 
 /* === TYPOGRAPHY === */
-h1, h2, h3 {
+/* Main title only gets gradient (not sidebar headers with emojis) */
+.main h1 {
     background: var(--primary-gradient);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
     font-weight: 700 !important;
+}
+
+h2, h3 {
+    color: var(--text-primary) !important;
+    font-weight: 600 !important;
 }
 
 .stMarkdown p {
@@ -423,13 +429,12 @@ h1, h2, h3 {
     padding-top: 1rem !important;
 }
 
-/* Sidebar headers */
+/* Sidebar headers - keep emoji colors visible */
 .stSidebar h1, .stSidebar h2, .stSidebar h3 {
-    background: var(--primary-gradient);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    color: #a78bfa !important;  /* Soft purple */
     font-size: 1.1rem !important;
     letter-spacing: 0.5px;
+    font-weight: 600 !important;
 }
 
 /* Sidebar dividers */
