@@ -4,18 +4,23 @@
   "description": "World-class RAG system for your personal Obsidian knowledge base",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0e1117",
-  "theme_color": "#ff4b4b",
+  "background_color": "#0f0f23",
+  "theme_color": "#667eea",
   "orientation": "any",
   "icons": [
     {
+      "src": "/app/static/favicon-16.png",
+      "sizes": "16x16",
+      "type": "image/png"
+    },
+    {
       "src": "/app/static/favicon-32.png",
-      "sizes": "35x35",
+      "sizes": "32x32",
       "type": "image/png"
     },
     {
       "src": "/app/static/icon-192.png",
-      "sizes": "125x125",
+      "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },

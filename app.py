@@ -365,30 +365,307 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS for UI refinements
+# Custom CSS for premium UI design
 st.markdown("""
 <style>
-/* Search area - better spacing */
+/* ============================================
+   ULTRARAG PREMIUM DESIGN SYSTEM
+   Glass morphism + Modern dark theme
+   ============================================ */
+
+/* === ROOT VARIABLES === */
+:root {
+    --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    --accent-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+    --success-gradient: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+    --glass-bg: rgba(255, 255, 255, 0.05);
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    --text-primary: #ffffff;
+    --text-secondary: rgba(255, 255, 255, 0.7);
+    --text-muted: rgba(255, 255, 255, 0.5);
+    --border-radius: 12px;
+    --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* === GLOBAL STYLES === */
+.stApp {
+    background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%) !important;
+}
+
+/* === MAIN CONTENT AREA === */
+.main .block-container {
+    padding-top: 1.5rem !important;
+    padding-bottom: 2rem !important;
+    max-width: 1200px !important;
+}
+
+/* === TYPOGRAPHY === */
+h1, h2, h3 {
+    background: var(--primary-gradient);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-weight: 700 !important;
+}
+
+.stMarkdown p {
+    color: var(--text-secondary) !important;
+}
+
+/* === SIDEBAR STYLING === */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, rgba(15, 15, 35, 0.95) 0%, rgba(26, 26, 46, 0.95) 100%) !important;
+    border-right: 1px solid var(--glass-border) !important;
+}
+
+[data-testid="stSidebar"] > div:first-child {
+    padding-top: 1rem !important;
+}
+
+/* Sidebar headers */
+.stSidebar h1, .stSidebar h2, .stSidebar h3 {
+    background: var(--primary-gradient);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-size: 1.1rem !important;
+    letter-spacing: 0.5px;
+}
+
+/* Sidebar dividers */
+.stSidebar hr {
+    border-color: var(--glass-border) !important;
+    margin: 1rem 0 !important;
+}
+
+/* === GLASS CARDS (Expanders, Containers) === */
+[data-testid="stExpander"] {
+    background: var(--glass-bg) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: var(--border-radius) !important;
+    backdrop-filter: blur(10px) !important;
+    -webkit-backdrop-filter: blur(10px) !important;
+    box-shadow: var(--glass-shadow) !important;
+    overflow: hidden !important;
+    transition: var(--transition) !important;
+}
+
+[data-testid="stExpander"]:hover {
+    border-color: rgba(102, 126, 234, 0.4) !important;
+    box-shadow: 0 8px 32px rgba(102, 126, 234, 0.15) !important;
+}
+
+[data-testid="stExpander"] summary {
+    color: var(--text-primary) !important;
+    font-weight: 500 !important;
+}
+
+/* === BUTTONS === */
+/* Primary button - gradient */
+button[kind="primary"] {
+    background: var(--primary-gradient) !important;
+    border: none !important;
+    border-radius: 8px !important;
+    color: white !important;
+    font-weight: 600 !important;
+    padding: 0.6rem 1.5rem !important;
+    min-height: 2.5rem !important;
+    transition: var(--transition) !important;
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4) !important;
+}
+
+button[kind="primary"]:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5) !important;
+}
+
+/* Secondary button - glass */
+button[kind="secondary"] {
+    background: var(--glass-bg) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: 8px !important;
+    color: var(--text-primary) !important;
+    backdrop-filter: blur(10px) !important;
+    transition: var(--transition) !important;
+}
+
+button[kind="secondary"]:hover {
+    background: rgba(255, 255, 255, 0.1) !important;
+    border-color: rgba(102, 126, 234, 0.5) !important;
+}
+
+/* === INPUT FIELDS === */
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea {
+    background: var(--glass-bg) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: 8px !important;
+    color: var(--text-primary) !important;
+    backdrop-filter: blur(10px) !important;
+    transition: var(--transition) !important;
+}
+
+[data-testid="stTextInput"] input:focus,
+[data-testid="stTextArea"] textarea:focus {
+    border-color: #667eea !important;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2) !important;
+}
+
+[data-testid="stTextInput"] input::placeholder {
+    color: var(--text-muted) !important;
+}
+
+/* === SELECT BOXES === */
+[data-testid="stSelectbox"] > div > div {
+    background: var(--glass-bg) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: 8px !important;
+    backdrop-filter: blur(10px) !important;
+}
+
+div[data-testid="stSelectbox"] {
+    min-width: 70px !important;
+}
+
+div[data-testid="stSelectbox"] label {
+    display: none !important;
+}
+
+/* === RADIO BUTTONS === */
+div[data-testid="stRadio"] > div {
+    gap: 0.5rem !important;
+}
+
+div[data-testid="stRadio"] label {
+    background: var(--glass-bg) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: 6px !important;
+    padding: 0.4rem 0.8rem !important;
+    font-size: 0.85rem !important;
+    transition: var(--transition) !important;
+}
+
+div[data-testid="stRadio"] label:hover {
+    background: rgba(255, 255, 255, 0.1) !important;
+}
+
+div[data-testid="stRadio"] label[data-checked="true"] {
+    background: var(--primary-gradient) !important;
+    border-color: transparent !important;
+}
+
+/* === CHECKBOXES === */
+div[data-testid="stCheckbox"] label {
+    white-space: nowrap !important;
+    font-size: 0.85rem !important;
+    color: var(--text-secondary) !important;
+}
+
+div[data-testid="stCheckbox"] label span[data-checked="true"] {
+    background: var(--primary-gradient) !important;
+}
+
+/* === SUCCESS/ERROR/INFO ALERTS === */
+[data-testid="stAlert"] {
+    background: var(--glass-bg) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: var(--border-radius) !important;
+    backdrop-filter: blur(10px) !important;
+}
+
+/* Success alert */
+div[data-baseweb="notification"][kind="positive"] {
+    background: rgba(17, 153, 142, 0.15) !important;
+    border-left: 4px solid #38ef7d !important;
+}
+
+/* Error alert */
+div[data-baseweb="notification"][kind="negative"] {
+    background: rgba(245, 87, 108, 0.15) !important;
+    border-left: 4px solid #f5576c !important;
+}
+
+/* Info alert */
+div[data-baseweb="notification"][kind="info"] {
+    background: rgba(102, 126, 234, 0.15) !important;
+    border-left: 4px solid #667eea !important;
+}
+
+/* === METRICS === */
+[data-testid="stMetric"] {
+    background: var(--glass-bg) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: var(--border-radius) !important;
+    padding: 1rem !important;
+    backdrop-filter: blur(10px) !important;
+}
+
+[data-testid="stMetric"] label {
+    color: var(--text-muted) !important;
+    font-size: 0.85rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 1px !important;
+}
+
+[data-testid="stMetric"] [data-testid="stMetricValue"] {
+    background: var(--primary-gradient);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-weight: 700 !important;
+}
+
+/* === TABS === */
+[data-testid="stTabs"] button {
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 2px solid transparent !important;
+    color: var(--text-secondary) !important;
+    transition: var(--transition) !important;
+}
+
+[data-testid="stTabs"] button:hover {
+    color: var(--text-primary) !important;
+}
+
+[data-testid="stTabs"] button[aria-selected="true"] {
+    color: var(--text-primary) !important;
+    border-bottom-color: #667eea !important;
+}
+
+/* === CODE BLOCKS === */
+[data-testid="stCode"] {
+    background: rgba(0, 0, 0, 0.3) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: 8px !important;
+}
+
+/* === SPINNER === */
+[data-testid="stSpinner"] > div {
+    border-top-color: #667eea !important;
+}
+
+/* === SEARCH AREA === */
 div[data-testid="stHorizontalBlock"] {
     gap: 0.5rem;
     align-items: center;
 }
 
-/* Query history - datetime caption styling */
+/* === QUERY HISTORY (Sidebar) === */
 .stSidebar [data-testid="stCaptionContainer"] {
     margin-bottom: -0.5rem !important;
     margin-top: 0.5rem !important;
+    color: var(--text-muted) !important;
 }
 
-/* Query history buttons - improved styling */
 .stSidebar button[kind="secondary"] {
     text-align: left !important;
-    padding: 0.4rem 0.6rem !important;
-    line-height: 1.35 !important;
+    padding: 0.5rem 0.75rem !important;
+    line-height: 1.4 !important;
     white-space: normal !important;
     height: auto !important;
     min-height: unset !important;
     font-size: 0.8rem !important;
+    margin-bottom: 0.25rem !important;
 }
 
 /* Sidebar section spacing */
@@ -396,39 +673,86 @@ div[data-testid="stHorizontalBlock"] {
     margin-bottom: 0 !important;
 }
 
-/* Radio buttons - compact */
-div[data-testid="stRadio"] > div {
-    gap: 0.3rem !important;
+/* === SCROLLBAR STYLING === */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
 }
 
-div[data-testid="stRadio"] label {
-    padding: 0.2rem 0.4rem !important;
-    font-size: 0.85rem !important;
+::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
 }
 
-/* Checkbox labels - prevent wrapping */
-div[data-testid="stCheckbox"] label {
-    white-space: nowrap !important;
-    font-size: 0.85rem !important;
+::-webkit-scrollbar-thumb {
+    background: rgba(102, 126, 234, 0.5);
+    border-radius: 4px;
 }
 
-/* Search button - consistent height */
-button[kind="primary"] {
-    min-height: 2.4rem !important;
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(102, 126, 234, 0.7);
 }
 
-/* Main container - reduce top padding */
-.main .block-container {
-    padding-top: 2rem !important;
+/* === LINKS === */
+a {
+    color: #667eea !important;
+    text-decoration: none !important;
+    transition: var(--transition) !important;
 }
 
-/* Selectbox in search row - smaller */
-div[data-testid="stSelectbox"] {
-    min-width: 70px !important;
+a:hover {
+    color: #764ba2 !important;
 }
 
-div[data-testid="stSelectbox"] label {
-    display: none !important;
+/* === DIVIDERS === */
+hr {
+    border: none !important;
+    height: 1px !important;
+    background: var(--glass-border) !important;
+    margin: 1.5rem 0 !important;
+}
+
+/* === DATAFRAMES/TABLES === */
+[data-testid="stDataFrame"] {
+    background: var(--glass-bg) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: var(--border-radius) !important;
+    overflow: hidden !important;
+}
+
+/* === PROGRESS BAR === */
+[data-testid="stProgress"] > div > div {
+    background: var(--primary-gradient) !important;
+}
+
+/* === TOOLTIP === */
+[data-testid="stTooltipContent"] {
+    background: rgba(15, 15, 35, 0.95) !important;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: 8px !important;
+    backdrop-filter: blur(10px) !important;
+}
+
+/* === ANIMATIONS === */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+[data-testid="stExpander"],
+[data-testid="stAlert"],
+[data-testid="stMetric"] {
+    animation: fadeIn 0.3s ease-out;
+}
+
+/* === LOGO GLOW EFFECT === */
+.stSidebar img {
+    filter: drop-shadow(0 0 20px rgba(102, 126, 234, 0.3));
+    transition: var(--transition);
+}
+
+.stSidebar img:hover {
+    filter: drop-shadow(0 0 30px rgba(102, 126, 234, 0.5));
 }
 </style>
 """, unsafe_allow_html=True)
@@ -761,8 +1085,16 @@ def main():
     
     # Sidebar for configuration
     with st.sidebar:
-        st.header("⚙️ Configuration")
-        
+        # Logo
+        st.markdown(
+            """
+            <div style='text-align: center; padding: 10px 0 20px 0;'>
+                <img src='app/static/icon-512.png' style='width: 175px; height: 175px; border-radius: 12px;'>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
         # Check if .env exists
         if not Path(".env").exists():
             st.error("⚠️ .env file not found!")
