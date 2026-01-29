@@ -32,6 +32,16 @@ from federated_query import FederatedQueryEngine, IndexSource
 from temporal_filter import create_temporal_filter, DateFilterPreset
 from raptor_index import RaptorIndexManager, RaptorMode
 
+# New unified modules (AI-optimized)
+import indexing as indexing_module
+import retrieval as retrieval_module
+from models import (
+    QueryResult as ModelsQueryResult,
+    ResearchResult as ModelsResearchResult,
+    IndexNotFoundError,
+    ConfigurationError,
+)
+
 # Configure logging (with guard to prevent duplicate handlers in Streamlit)
 def _setup_logging():
     """Setup logging once, avoiding duplicate handlers when imported multiple times."""
