@@ -102,11 +102,12 @@ def invalidate_cache() -> bool:
     return invalidated
 
 
-def index_exists(config: VectorDBConfig) -> bool:
+def index_exists(config: VectorDBConfig, table_name: str = "vectors") -> bool:
     """Check if an index already exists in the vector store.
 
     Args:
         config: Vector database configuration
+        table_name: Name of the table to check (default: "vectors")
 
     Returns:
         True if index exists, False otherwise
@@ -122,8 +123,8 @@ def index_exists(config: VectorDBConfig) -> bool:
 
         try:
             db = lancedb.connect(str(config.lancedb_path))
-            table_names = db.table_names()
-            return "obsidian_embeddings" in table_names
+            existing_tables = db.table_names()
+            return table_name in existing_tables
         except Exception:
             return False
 
@@ -143,12 +144,13 @@ def index_exists(config: VectorDBConfig) -> bool:
     return False
 
 
-def get_vector_store(config: VectorDBConfig, mode: str = "append") -> Any:
+def get_vector_store(config: VectorDBConfig, mode: str = "append", table_name: str = "vectors") -> Any:
     """Initialize vector store based on configuration.
 
     Args:
         config: Vector database configuration
         mode: Mode for LanceDB - "append" (default) or "overwrite"
+        table_name: Table name for LanceDB (default: "vectors")
 
     Returns:
         Initialized vector store
@@ -182,7 +184,7 @@ def get_vector_store(config: VectorDBConfig, mode: str = "append") -> Any:
 
             return LanceDBVectorStore(
                 uri=str(config.lancedb_path),
-                table_name="obsidian_embeddings",
+                table_name=table_name,
                 mode=mode
             )
 
@@ -302,7 +304,8 @@ def reconstruct_nodes_from_lancedb(
 def load_vector_index(
     vector_store: Any,
     embed_model: BaseEmbedding,
-    config: VectorDBConfig | None = None
+    config: VectorDBConfig | None = None,
+    table_name: str = "vectors"
 ) -> VectorStoreIndex:
     """Load existing vector index.
 
@@ -310,6 +313,7 @@ def load_vector_index(
         vector_store: The vector store to load from
         embed_model: Embedding model for the index
         config: Optional VectorDBConfig to enable docstore reconstruction
+        table_name: Table name for LanceDB (default: "vectors")
 
     Returns:
         VectorStoreIndex with populated docstore (if config provided for LanceDB)
@@ -336,7 +340,7 @@ def load_vector_index(
             if nodes is None:
                 # Cache miss - reconstruct from LanceDB
                 logger.info("Reconstructing docstore from LanceDB metadata...")
-                nodes = reconstruct_nodes_from_lancedb(config)
+                nodes = reconstruct_nodes_from_lancedb(config, table_name=table_name)
                 if nodes:
                     _save_nodes_to_cache(nodes, config)
 

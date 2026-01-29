@@ -244,7 +244,8 @@ class TestDocumentConversion:
         assert doc.metadata['num_wikilinks'] == 3
 
     def test_notes_to_documents_preserves_metadata(self, temp_vault, create_test_note):
-        """Test that custom frontmatter fields are preserved."""
+        """Test that custom frontmatter fields are preserved in extra_metadata JSON."""
+        import json
         content = """---
 title: Custom Fields
 author: Test Author
@@ -260,8 +261,10 @@ Content here.
         documents = loader.notes_to_documents([note])
         doc = documents[0]
 
-        assert doc.metadata['author'] == "Test Author"
-        assert doc.metadata['custom_field'] == "custom_value"
+        # Custom frontmatter is stored in extra_metadata JSON for schema stability
+        extra = json.loads(doc.metadata['extra_metadata'])
+        assert extra['author'] == "Test Author"
+        assert extra['custom_field'] == "custom_value"
 
 
 class TestWikilinkGraph:

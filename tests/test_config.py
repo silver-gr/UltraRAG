@@ -121,7 +121,7 @@ class TestLLMConfig:
         config = LLMConfig()
         assert config.model == "gemini-3-flash-preview"
         assert config.temperature == 0.1
-        assert config.max_tokens == 8192
+        assert config.max_tokens == 65536  # Gemini 3 Flash max output
         assert config.enable_thinking_mode is True
 
 
@@ -170,20 +170,20 @@ class TestRetrievalConfig:
     """Test RetrievalConfig validation."""
 
     def test_valid_retrieval_config(self):
-        """Test creating a valid retrieval config."""
+        """Test creating a valid retrieval config with explicit values."""
         config = RetrievalConfig(
             top_k=75,
-            rerank_top_n=10,
+            rerank_top_n=50,
             similarity_threshold=0.7
         )
         assert config.top_k == 75
-        assert config.rerank_top_n == 10
+        assert config.rerank_top_n == 50  # Explicit value passed
 
     def test_default_retrieval_config(self):
         """Test default retrieval configuration."""
         config = RetrievalConfig()
         assert config.top_k == 75
-        assert config.rerank_top_n == 10
+        assert config.rerank_top_n == 100  # Let UI max_sources control display
         assert config.reranker_model == "rerank-2.5"  # No "voyage-" prefix!
         assert config.enable_hybrid_search is True
         assert config.similarity_threshold == 0.3  # Lowered from 0.7
@@ -345,7 +345,7 @@ class TestLoadConfig:
         config = load_config()
 
         # Should use defaults
-        assert config.embedding.model == "voyage-3.5-lite"
+        assert config.embedding.model == "voyage-4-lite"
         assert config.embedding.chunk_size == 512
         assert config.llm.temperature == 0.1
         assert config.vector_db.db_type == "lancedb"
