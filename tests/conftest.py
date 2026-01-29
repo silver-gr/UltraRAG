@@ -186,14 +186,10 @@ def mock_embedding_model():
     Mock embedding model that returns deterministic vectors.
 
     Agent note: Use this for unit tests to avoid Voyage API calls.
+    Uses llama_index MockEmbedding to satisfy type checks.
     """
-    mock = MagicMock()
-    # Return 1024-dim vector (Voyage default)
-    mock.get_text_embedding.return_value = [0.1] * 1024
-    mock.get_text_embedding_batch.return_value = [[0.1] * 1024]
-    mock._get_text_embeddings.return_value = [[0.1] * 1024]
-    mock.embed_dim = 1024
-    return mock
+    from llama_index.core.embeddings import MockEmbedding
+    return MockEmbedding(embed_dim=1024)
 
 
 @pytest.fixture
