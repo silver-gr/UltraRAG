@@ -2,6 +2,67 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Quick Reference (Read First)
+
+| Task | File to Read | Public API |
+|------|--------------|------------|
+| Add/fix indexing logic | `indexing.py` | `index_vault()`, `index_conversations()`, `load_index()` |
+| Add/fix query/retrieval | `retrieval.py` | `query()`, `federated_query()`, `research()` |
+| Add/fix UI | `app.py` | `main()` (Streamlit entry) |
+| Add/fix CLI commands | `main.py` | `cli_main()` |
+| Add/modify types | `models.py` | All dataclasses, protocols |
+| Change config options | `config.py` | `RAGConfig`, `.env` |
+
+## Module Boundaries (IMPORTANT)
+
+| Module | Owns | Does NOT touch |
+|--------|------|----------------|
+| `indexing.py` | Document loading, chunking, embedding, vector store | Query logic, UI |
+| `retrieval.py` | Query engines, reranking, research mode | Indexing, UI |
+| `app.py` | Streamlit components, session state | Business logic (calls retrieval) |
+| `main.py` | CLI parsing, command routing | Business logic (calls indexing/retrieval) |
+| `models.py` | All dataclasses, exceptions, protocols | No logic, just definitions |
+
+**Cross-module changes:** If your task spans multiple modules, create separate changes per module and test each.
+
+## Common Tasks
+
+### Add new index source (e.g., "notion")
+1. Read `indexing.py` - see pattern from `index_vault()`
+2. Add `index_notion()` following same pattern
+3. Add test in `tests/test_indexing.py`
+4. Update this table
+
+### Add new query mode (e.g., "graph")
+1. Read `retrieval.py` - see `mode` parameter handling
+2. Add mode handling in `_build_query_engine()`
+3. Add test in `tests/test_retrieval.py`
+
+### Fix a bug in research mode
+1. Read `retrieval.py` only - `research()` function
+2. Run `pytest tests/test_retrieval.py::TestResearch -v`
+3. Make fix, run tests again
+
+## Error Quick Reference
+
+| Error | Likely Cause | Fix |
+|-------|--------------|-----|
+| `IndexNotFoundError` | Index not built | Run `index_vault(config)` |
+| `LLMRateLimitError` | Gemini 429 | Set `LLM_BACKEND=cli` |
+| `EmbeddingQuotaError` | Voyage limit | Wait or check `data/voyage_usage.json` |
+| `ConfigurationError` | Missing .env value | Check error message for key |
+
+## Testing Commands
+
+```bash
+pytest -m unit              # Fast, no API (run first)
+pytest tests/test_indexing.py -v   # After changing indexing.py
+pytest tests/test_retrieval.py -v  # After changing retrieval.py
+pytest -x --tb=short        # Stop at first failure
+```
+
+---
+
 ## Project Overview
 
 **UltraRAG v1.3.0** - A production-grade RAG system for Obsidian vaults implementing late chunking, hybrid retrieval, query transformation (HyDE/Multi-Query), self-correction patterns, and iterative research mode.
