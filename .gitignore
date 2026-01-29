@@ -53,6 +53,9 @@ temp/
 # Claude Code
 .claude/
 
+# SSL Certificates
+certs/
+
 # Gemini
 .gemini-clipboard/
 

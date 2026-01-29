@@ -1,5 +1,8 @@
 [server]
 enableStaticServing = true
+sslCertFile = "certs/frontend.pem"
+sslKeyFile = "certs/frontend-key.pem"
+address = "0.0.0.0"
 
 [browser]
 gatherUsageStats = false
