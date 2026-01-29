@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
+venv
 venv/
 env/
 ENV/
@@ -53,7 +54,8 @@ temp/
 # Claude Code
 .claude/
 
-# SSL Certificates
+# SSL Certificates (symlink to shared certs)
+certs
 certs/
 
 # Gemini
