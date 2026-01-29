@@ -247,6 +247,23 @@ class ContentResearchConfig(BaseModel):
         return v
 
 
+class BooksConfig(BaseModel):
+    """Books index configuration for EPUB and PDF files."""
+    enabled: bool = Field(default=False)
+    path: Optional[Path] = Field(default=None)
+    weight: float = Field(default=0.9)  # Score weight vs vault (vault=1.0)
+    include_in_default_search: bool = Field(default=True)
+    table_name: str = Field(default="books")
+
+    @field_validator('weight')
+    @classmethod
+    def validate_weight(cls, v: float) -> float:
+        """Validate weight is between 0 and 2."""
+        if not 0 <= v <= 2:
+            raise ValueError(f"weight must be between 0 and 2, got {v}")
+        return v
+
+
 class RaptorConfig(BaseModel):
     """RAPTOR (Recursive Abstractive Processing for Tree-Organized Retrieval) configuration.
 
@@ -294,6 +311,7 @@ class RAGConfig(BaseModel):
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     conversations: ConversationsConfig = Field(default_factory=ConversationsConfig)
+    books: BooksConfig = Field(default_factory=BooksConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     content_research: ContentResearchConfig = Field(default_factory=ContentResearchConfig)
     raptor: RaptorConfig = Field(default_factory=RaptorConfig)
@@ -454,6 +472,13 @@ def load_config() -> RAGConfig:
             top_k=int(os.getenv("CONTENT_RESEARCH_TOP_K", "30")),
             threshold=float(os.getenv("CONTENT_RESEARCH_THRESHOLD", "0.4")),
             dedup_similarity=float(os.getenv("CONTENT_RESEARCH_DEDUP_SIMILARITY", "0.85")),
+        ),
+        books=BooksConfig(
+            enabled=os.getenv("BOOKS_ENABLED", "false").lower() == "true",
+            path=Path(os.getenv("BOOKS_PATH", "")) if os.getenv("BOOKS_PATH") else None,
+            weight=float(os.getenv("BOOKS_WEIGHT", "0.9")),
+            include_in_default_search=os.getenv("BOOKS_IN_DEFAULT_SEARCH", "true").lower() == "true",
+            table_name=os.getenv("BOOKS_TABLE_NAME", "books")
         ),
         raptor=RaptorConfig(
             enabled=os.getenv("ENABLE_RAPTOR", "false").lower() == "true",

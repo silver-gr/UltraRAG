@@ -136,6 +136,11 @@ class UltraRAG:
             self.conversations_vector_store = None
             self.federated_engine = None
 
+            # Books index (federated retrieval)
+            self.books_index = None
+            self.books_nodes = None
+            self.books_vector_store = None
+
             # RAPTOR index (hierarchical summaries)
             self.raptor_manager = None
             if self.config.raptor.enabled:
@@ -996,6 +1001,237 @@ class UltraRAG:
             logger.error(f"Failed to load conversations index: {e}", exc_info=True)
             return False
 
+    # ============================================
+    # Books Indexing Methods
+    # ============================================
+
+    def _setup_books_vector_store(self, mode: str = "append") -> bool:
+        """Setup vector store for books index.
+
+        Args:
+            mode: "append" to add to existing, "overwrite" to recreate
+
+        Returns:
+            True if table already existed
+        """
+        import lancedb
+
+        db_path = self.config.vector_db.lancedb_path
+        table_name = self.config.books.table_name
+
+        db = lancedb.connect(str(db_path))
+        table_exists = table_name in db.table_names()
+
+        if mode == "overwrite" and table_exists:
+            logger.info(f"Dropping existing books table: {table_name}")
+            db.drop_table(table_name)
+            table_exists = False
+
+        from llama_index.vector_stores.lancedb import LanceDBVectorStore
+
+        self.books_vector_store = LanceDBVectorStore(
+            uri=str(db_path),
+            table_name=table_name,
+            mode="overwrite" if not table_exists else "append"
+        )
+
+        return table_exists
+
+    def books_index_exists(self) -> bool:
+        """Check if books index exists."""
+        import lancedb
+
+        try:
+            db_path = self.config.vector_db.lancedb_path
+            table_name = self.config.books.table_name
+
+            if not db_path.exists():
+                return False
+
+            db = lancedb.connect(str(db_path))
+            return table_name in db.table_names()
+        except Exception:
+            return False
+
+    def index_books(
+        self,
+        books_path: Optional[Path] = None,
+        force_reindex: bool = False,
+        batch_size: int = 10,
+        interactive: bool = True
+    ):
+        """Index books (EPUB/PDF) for federated retrieval.
+
+        Args:
+            books_path: Path to books directory (defaults to config)
+            force_reindex: Force recreation of index
+            batch_size: Number of books per batch
+            interactive: If True, prompt for choices; if False, auto-load existing
+        """
+        from book_loader import BookLoader
+        from chunking import ObsidianChunker
+
+        print("\n=== Indexing Books ===")
+
+        # Determine path
+        bks_path = books_path or self.config.books.path
+        if not bks_path:
+            print("❌ No books path specified.")
+            print("Set BOOKS_PATH in .env or pass books_path argument.")
+            return
+
+        bks_path = Path(bks_path)
+        if not bks_path.exists():
+            print(f"❌ Books path not found: {bks_path}")
+            return
+
+        # Show stats
+        loader = BookLoader(bks_path)
+        stats = loader.get_book_stats()
+        print(f"\nFound {stats['total_books']} books ({stats['total_size_mb']} MB)")
+        print(f"  EPUB: {stats['by_type'].get('epub', 0)}")
+        print(f"  PDF: {stats['by_type'].get('pdf', 0)}")
+
+        if stats['total_books'] == 0:
+            print("No books found!")
+            return
+
+        # Check for existing index
+        if not force_reindex and self.books_index_exists():
+            if interactive:
+                print("\nExisting books index found.")
+                print("Options:")
+                print("  1. Load existing (fast)")
+                print("  2. Recreate (slow)")
+                print("  3. Cancel")
+
+                choice = input("\nChoice (1/2/3): ").strip()
+                if choice == "1":
+                    if self.load_books_index():
+                        print("Books index loaded!")
+                        self._setup_federated_engine()
+                        return
+                    print("Failed to load. Recreating...")
+                elif choice == "3":
+                    return
+                # choice == "2" continues to recreate
+            else:
+                # Non-interactive: just load existing
+                if self.load_books_index():
+                    print("Books index loaded!")
+                    self._setup_federated_engine()
+                    return
+                print("Failed to load. Will create new index...")
+
+        # Setup vector store
+        mode = "overwrite" if force_reindex or self.books_index_exists() else "create"
+        self._setup_books_vector_store(mode=mode)
+
+        # Load all books
+        print(f"\nLoading books from: {bks_path}")
+        documents = loader.load_all_books(show_progress=True)
+
+        if not documents:
+            print("No documents extracted from books!")
+            return
+
+        print(f"Extracted {len(documents)} documents from books")
+
+        # Chunk documents with book-specific chunker
+        print("Chunking book documents...")
+        from book_chunker import BookChunker, BookChunkConfig
+
+        chunk_config = BookChunkConfig(
+            chunk_size=1024,  # Larger chunks for books
+            chunk_overlap=128,
+            min_chunk_size=100,
+            respect_chapters=True,
+            respect_paragraphs=True
+        )
+        chunker = BookChunker(config=chunk_config)
+
+        all_nodes = []
+        total_batches = (len(documents) + batch_size - 1) // batch_size
+
+        for batch_idx in range(0, len(documents), batch_size):
+            batch_num = batch_idx // batch_size + 1
+            batch_docs = documents[batch_idx:batch_idx + batch_size]
+
+            print(f"\n--- Batch {batch_num}/{total_batches} ---")
+
+            try:
+                batch_nodes = chunker.chunk_documents(batch_docs)
+                print(f"Created {len(batch_nodes)} chunks")
+
+                if self.books_index is None:
+                    print("Creating books index...")
+                    self.books_index = create_vector_index(
+                        nodes=batch_nodes,
+                        vector_store=self.books_vector_store,
+                        embed_model=self.embed_model,
+                        show_progress=True
+                    )
+                else:
+                    print("Adding to books index...")
+                    self.books_index.insert_nodes(batch_nodes, show_progress=True)
+
+                all_nodes.extend(batch_nodes)
+
+            except Exception as e:
+                logger.error(f"Error in batch {batch_num}: {e}", exc_info=True)
+                print(f"Warning: Error in batch {batch_num}: {e}")
+                continue
+
+        self.books_nodes = all_nodes
+        print(f"\n✅ Indexed {len(all_nodes)} book chunks from {stats['total_books']} books!")
+
+        # Setup federated engine if vault index exists
+        if self.index is not None:
+            self._setup_federated_engine()
+
+    def load_books_index(self) -> bool:
+        """Load existing books index."""
+        if not self.books_index_exists():
+            return False
+
+        try:
+            print("Loading books index...")
+
+            # Setup vector store in append mode
+            self._setup_books_vector_store(mode="append")
+
+            # Load index
+            from llama_index.core import StorageContext, VectorStoreIndex
+
+            storage_context = StorageContext.from_defaults(
+                vector_store=self.books_vector_store
+            )
+
+            self.books_index = VectorStoreIndex.from_vector_store(
+                vector_store=self.books_vector_store,
+                embed_model=self.embed_model,
+                storage_context=storage_context
+            )
+
+            # Reconstruct nodes from LanceDB
+            from vector_store import reconstruct_nodes_from_lancedb
+            table_name = self.config.books.table_name
+            self.books_nodes = reconstruct_nodes_from_lancedb(
+                self.config.vector_db, table_name=table_name
+            )
+
+            # Populate docstore
+            for node in self.books_nodes:
+                self.books_index.docstore.add_documents([node])
+
+            print(f"Loaded {len(self.books_nodes)} book nodes")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to load books index: {e}", exc_info=True)
+            return False
+
     def _setup_federated_engine(self):
         """Setup federated query engine for both indexes."""
         if self.index is None:
@@ -1022,6 +1258,16 @@ class UltraRAG:
                 source_type="conversations",
                 weight=self.config.conversations.weight,
                 nodes=self.conversations_nodes
+            ))
+
+        # Books source
+        if self.books_index is not None:
+            sources.append(IndexSource(
+                name="books",
+                index=self.books_index,
+                source_type="books",
+                weight=self.config.books.weight,
+                nodes=self.books_nodes
             ))
 
         if len(sources) > 1:
@@ -2020,6 +2266,15 @@ def main():
             rag.index_raptor()
             continue
 
+        if query.lower() == 'books':
+            # Index books
+            books_path = input("Books path (or Enter for default): ").strip()
+            if books_path:
+                rag.index_books(Path(books_path))
+            else:
+                rag.index_books()
+            continue
+
         if query.lower() == 'cache':
             # Invalidate cache
             from vector_store import invalidate_cache
@@ -2051,6 +2306,13 @@ def main():
                 print(f"\n🔬 Research mode enabled (this may take 30-60 seconds)...")
                 result = rag.query_research(query_text)
                 mode = "research"
+            elif query.startswith('@books '):
+                query_text = query[7:]
+                if rag.books_index is None:
+                    print("❌ Books index not loaded. Run 'books' command first.")
+                    continue
+                result = rag.query_federated(query_text, source_filter=["books"])
+                mode = "books"
             elif query.startswith('@raptor '):
                 query_text = query[8:]
                 print(f"\n🌳 RAPTOR mode enabled...")

@@ -38,6 +38,7 @@ def _get_federated_template(source_types: List[str]) -> str:
     has_vault = "vault" in source_types
     has_conv = "conversations" in source_types
     has_web = "web" in source_types
+    has_books = "books" in source_types
 
     # Build intro based on available sources
     sources_list = []
@@ -45,6 +46,8 @@ def _get_federated_template(source_types: List[str]) -> str:
         sources_list.append("personal notes from an Obsidian vault")
     if has_conv:
         sources_list.append("AI conversation history")
+    if has_books:
+        sources_list.append("book library (EPUB/PDF)")
     if has_web:
         sources_list.append("web search results")
 
@@ -59,6 +62,8 @@ def _get_federated_template(source_types: List[str]) -> str:
     notes = []
     if has_conv:
         notes.append("Some context may come from past AI conversations (marked with source_type: conversations).\nTreat these as reference material that may contain useful information.")
+    if has_books:
+        notes.append("Some context comes from books in the library (marked with source_type: books).\nBook sources include title and chapter information.")
     if has_web:
         notes.append("Some context comes from web search results (marked with source_type: web).\nWeb sources are marked with their URL for reference.")
 
@@ -97,7 +102,7 @@ class IndexSource:
     """Represents a source index in the federation."""
     name: str
     index: VectorStoreIndex
-    source_type: Literal["vault", "conversations", "web", "saved_items"]
+    source_type: Literal["vault", "conversations", "web", "saved_items", "books"]
     weight: float = 1.0  # Score multiplier for this source
     nodes: Optional[List] = None  # For BM25 retriever
     wikilink_graph: Optional[Dict[str, List[str]]] = None
@@ -444,7 +449,7 @@ class FederatedQueryEngine:
         summary = {
             "total_nodes": len(nodes),
             "by_source": {},
-            "by_type": {"vault": 0, "conversations": 0, "web": 0, "saved_items": 0}
+            "by_type": {"vault": 0, "conversations": 0, "web": 0, "saved_items": 0, "books": 0}
         }
 
         for node in nodes:

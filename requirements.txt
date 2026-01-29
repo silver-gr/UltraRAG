@@ -27,6 +27,8 @@ pymupdf  # PDF processing
 python-frontmatter  # Obsidian metadata
 beautifulsoup4
 lxml
+EbookLib  # EPUB processing
+html2text  # HTML to text conversion for EPUB
 
 # Utilities
 python-dotenv
@@ -50,3 +52,6 @@ pytest-cov>=4.0.0
 streamlit
 plotly
 watchdog  # Better Streamlit file watching performance
+
+# Web Content Extraction (optional)
+crawl4ai  # Deep content extraction from URLs
