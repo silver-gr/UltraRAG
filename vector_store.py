@@ -102,12 +102,12 @@ def invalidate_cache() -> bool:
     return invalidated
 
 
-def index_exists(config: VectorDBConfig, table_name: str = "vectors") -> bool:
+def index_exists(config: VectorDBConfig, table_name: str = "obsidian_embeddings") -> bool:
     """Check if an index already exists in the vector store.
 
     Args:
         config: Vector database configuration
-        table_name: Name of the table to check (default: "vectors")
+        table_name: Name of the table to check (default: "obsidian_embeddings")
 
     Returns:
         True if index exists, False otherwise
@@ -144,13 +144,13 @@ def index_exists(config: VectorDBConfig, table_name: str = "vectors") -> bool:
     return False
 
 
-def get_vector_store(config: VectorDBConfig, mode: str = "append", table_name: str = "vectors") -> Any:
+def get_vector_store(config: VectorDBConfig, mode: str = "append", table_name: str = "obsidian_embeddings") -> Any:
     """Initialize vector store based on configuration.
 
     Args:
         config: Vector database configuration
         mode: Mode for LanceDB - "append" (default) or "overwrite"
-        table_name: Table name for LanceDB (default: "vectors")
+        table_name: Table name for LanceDB (default: "obsidian_embeddings")
 
     Returns:
         Initialized vector store
@@ -305,7 +305,7 @@ def load_vector_index(
     vector_store: Any,
     embed_model: BaseEmbedding,
     config: VectorDBConfig | None = None,
-    table_name: str = "vectors"
+    table_name: str = "obsidian_embeddings"
 ) -> VectorStoreIndex:
     """Load existing vector index.
 
@@ -313,7 +313,7 @@ def load_vector_index(
         vector_store: The vector store to load from
         embed_model: Embedding model for the index
         config: Optional VectorDBConfig to enable docstore reconstruction
-        table_name: Table name for LanceDB (default: "vectors")
+        table_name: Table name for LanceDB (default: "obsidian_embeddings")
 
     Returns:
         VectorStoreIndex with populated docstore (if config provided for LanceDB)

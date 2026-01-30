@@ -81,7 +81,7 @@ def index_vault(config: RAGConfig) -> VectorStoreIndex | None:
     # Create index
     from vector_store import get_vector_store, create_vector_index
 
-    vector_store = get_vector_store(config.vector_db, mode="overwrite", table_name="vectors")
+    vector_store = get_vector_store(config.vector_db, mode="overwrite", table_name="obsidian_embeddings")
     index = create_vector_index(nodes, vector_store, embed_model)
 
     # Store wikilink graph in index metadata for graph retrieval
@@ -195,12 +195,12 @@ def load_index(
         ...     index = index_vault(config)
     """
     table_names = {
-        "vault": "vectors",
+        "vault": "obsidian_embeddings",
         "conversations": "conversations",
         "books": "books",
     }
 
-    table_name = table_names.get(source, "vectors")
+    table_name = table_names.get(source, "obsidian_embeddings")
 
     if not index_exists(config, source):
         logger.debug("Index not found | source=%s", source)
@@ -236,12 +236,12 @@ def index_exists(
     from vector_store import index_exists as vs_index_exists
 
     table_names = {
-        "vault": "vectors",
+        "vault": "obsidian_embeddings",
         "conversations": "conversations",
         "books": "books",
     }
 
-    table_name = table_names.get(source, "vectors")
+    table_name = table_names.get(source, "obsidian_embeddings")
 
     return vs_index_exists(config.vector_db, table_name=table_name)
 
