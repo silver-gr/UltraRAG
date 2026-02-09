@@ -145,27 +145,42 @@ def index_books(config: RAGConfig) -> VectorStoreIndex | None:
 
     Returns:
         VectorStoreIndex of books, or None if empty
-    """
-    logger.info("Starting books indexing | path=%s", config.books_path)
 
-    if not config.books_path or not Path(config.books_path).exists():
+    Raises:
+        ConfigurationError: If books_path is invalid
+    """
+    books_path = config.books.path
+    logger.info("Starting books indexing | path=%s", books_path)
+
+    if not books_path or not Path(books_path).exists():
         raise ConfigurationError("BOOKS_PATH", "/path/to/books")
 
     from book_loader import BookLoader
-    from book_chunker import BookChunker
+    from book_chunker import BookChunker, BookChunkConfig
     from embeddings import get_embedding_model
     from vector_store import get_vector_store, create_vector_index
 
-    loader = BookLoader(Path(config.books_path))
-    documents = loader.load_all()
+    loader = BookLoader(Path(books_path))
+    documents = loader.load_all_books(show_progress=True)
 
     if not documents:
         logger.warning("No books found")
         return None
 
+    logger.info("Loaded documents | count=%d", len(documents))
+
     embed_model = get_embedding_model(config.embedding)
-    chunker = BookChunker(config.embedding)
-    nodes = chunker.chunk_books(documents)
+    chunk_config = BookChunkConfig(
+        chunk_size=1024,
+        chunk_overlap=128,
+        min_chunk_size=100,
+        respect_chapters=True,
+        respect_paragraphs=True
+    )
+    chunker = BookChunker(config=chunk_config)
+    nodes = chunker.chunk_documents(documents)
+
+    logger.info("Chunked into nodes | count=%d", len(nodes))
 
     vector_store = get_vector_store(config.vector_db, mode="overwrite", table_name="books")
     index = create_vector_index(nodes, vector_store, embed_model)

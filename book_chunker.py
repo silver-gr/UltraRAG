@@ -40,6 +40,16 @@ class BookChunker:
         r'^Part\s+\d+',  # Part 1
         r'^PART\s+\d+',  # PART 1
         r'^#+\s+\d+\.',  # Numbered: ## 1. Introduction
+        # Self-help / instructional book patterns
+        r'^Step\s+\d+',  # Step 1
+        r'^STEP\s+\d+',  # STEP 1
+        r'^Exploration\s+\d+',  # Exploration 1.1
+        r'^Section\s+\d+',  # Section 1
+        r'^Lesson\s+\d+',  # Lesson 1
+        r'^Module\s+\d+',  # Module 1
+        r'^Unit\s+\d+',  # Unit 1
+        r'^Week\s+\d+',  # Week 1
+        r'^Day\s+\d+',  # Day 1
     ]
 
     def __init__(self, config: Optional[BookChunkConfig] = None):
