@@ -1,3 +1,6 @@
+# Memory bank
+.memory-bank/
+
 # Python
 __pycache__/
 *.py[cod]
