@@ -9,7 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Add/fix indexing logic | `indexing.py` | `index_vault()`, `index_conversations()`, `load_index()` |
 | Add/fix query/retrieval | `retrieval.py` | `query()`, `federated_query()`, `research()` |
 | Add/fix UI | `app.py` | `main()` (Streamlit entry) |
-| Add/fix CLI commands | `main.py` | `cli_main()` |
+| Add/fix interactive CLI | `main.py` | `cli_main()` |
+| Add/fix non-interactive CLI | `cli.py` | `python -m cli research/query/status` |
 | Add/modify types | `models.py` | All dataclasses, protocols |
 | Change config options | `config.py` | `RAGConfig`, `.env` |
 
@@ -20,7 +21,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `indexing.py` | Document loading, chunking, embedding, vector store | Query logic, UI |
 | `retrieval.py` | Query engines, reranking, research mode | Indexing, UI |
 | `app.py` | Streamlit components, session state | Business logic (calls retrieval) |
-| `main.py` | CLI parsing, command routing | Business logic (calls indexing/retrieval) |
+| `main.py` | Interactive CLI parsing, command routing | Business logic (calls indexing/retrieval) |
+| `cli.py` | Non-interactive CLI (agents/automation) | Business logic (calls indexing/retrieval) |
 | `models.py` | All dataclasses, exceptions, protocols | No logic, just definitions |
 
 **Cross-module changes:** If your task spans multiple modules, create separate changes per module and test each.
@@ -75,8 +77,13 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 # Activate environment
 source venv/bin/activate
 
-# Run CLI interface
+# Run interactive CLI
 python main.py
+
+# Run non-interactive CLI (for agents/automation)
+python -m cli research --topic "query" --depth quick|standard|deep
+python -m cli query --query "question" --source vault|conversations|all
+python -m cli status
 
 # Run web interface
 streamlit run app.py
@@ -167,10 +174,41 @@ When running `python main.py`, the following commands are available:
 | `help` | Show help |
 | `quit` / `exit` | Exit CLI |
 
+## Non-Interactive CLI (`cli.py`)
+
+For Claude Code agents and automation. All output is structured YAML/JSON on stdout. Logs go to stderr.
+
+```bash
+# Research (SuperResearch compatible)
+python -m cli research --topic "sleep optimization" --depth quick     # vault only
+python -m cli research --topic "habit formation" --depth standard     # vault + conversations
+python -m cli research --topic "neuroplasticity" --depth deep         # iterative research
+
+# Simple query
+python -m cli query --query "What is RAG?" --source vault
+python -m cli query --query "meditation techniques" --source all --mode hybrid
+
+# Check index status
+python -m cli status
+
+# Options (work before or after subcommand)
+--format yaml|json   # Output format (default: yaml)
+--quiet              # Suppress stderr logs
+```
+
+**Depth mapping:**
+
+| Depth | Sources | Backend Function |
+|-------|---------|-----------------|
+| `quick` | Vault only | `retrieval.query()` |
+| `standard` | Vault + Conversations | `retrieval.federated_query()` |
+| `deep` | Vault + Conversations (iterative) | `retrieval.research()` |
+
 ## Architecture
 
 ### Entry Points
-- `main.py` - CLI orchestrator with `UltraRAG` class
+- `main.py` - Interactive CLI with `UltraRAG` class
+- `cli.py` - Non-interactive CLI for agents/automation
 - `app.py` - Streamlit web interface
 
 ### Ingestion Pipeline
@@ -400,7 +438,8 @@ Query history is automatically saved to `data/query_history.json`:
 ## Key Source Files
 | File | Purpose |
 |------|---------|
-| `main.py` | CLI orchestrator, `UltraRAG` class |
+| `main.py` | Interactive CLI orchestrator, `UltraRAG` class |
+| `cli.py` | Non-interactive CLI for agents (`python -m cli`) |
 | `app.py` | Streamlit web interface |
 | `config.py` | Pydantic configuration models |
 | `loader.py` | Obsidian vault parsing |
