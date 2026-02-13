@@ -34,23 +34,38 @@ def format_duration(seconds: float) -> str:
 
 
 def extract_cited_numbers(text: str) -> set[int]:
-    """Extract all citation numbers from text (e.g., [1], [23], [145])."""
-    # Match [N] patterns where N is a number
-    matches = re.findall(r'\[(\d+)\]', text)
-    return set(int(m) for m in matches)
+    """Extract all citation numbers from text, handling multiple formats.
+
+    Handles:
+    - [1] - single number brackets
+    - [1, 2, 3] - comma-separated numbers in single brackets
+    - [1][2][3] - consecutive single-number brackets
+    """
+    numbers = set()
+
+    # Pattern 1: Single number brackets [1], [23]
+    for match in re.finditer(r'\[(\d+)\]', text):
+        numbers.add(int(match.group(1)))
+
+    # Pattern 2: Comma-separated numbers [1, 2, 3] or [1,2,3]
+    for match in re.finditer(r'\[(\d+(?:\s*,\s*\d+)+)\]', text):
+        for num in re.findall(r'\d+', match.group(1)):
+            numbers.add(int(num))
+
+    return numbers
 
 
 def filter_and_renumber_citations(answer: str, sources: list) -> tuple[str, list]:
     """Filter sources to only cited ones and renumber citations sequentially.
 
     Args:
-        answer: The answer text with citations like [1], [7], [263]
+        answer: The answer text with citations like [1], [7], [263] or [1, 7, 263]
         sources: Full list of sources with 'rank' field
 
     Returns:
         Tuple of (remapped_answer, filtered_sources) where citations are 1-N
     """
-    # Extract all cited source numbers from the answer
+    # Extract all cited source numbers from the answer (handles both [N] and [N, M, ...])
     cited_numbers = extract_cited_numbers(answer)
 
     if not cited_numbers:
@@ -62,14 +77,33 @@ def filter_and_renumber_citations(answer: str, sources: list) -> tuple[str, list
     old_to_new = {old: new for new, old in enumerate(sorted_cited, 1)}
 
     # Remap citations in the answer text
-    # Must replace largest numbers first to avoid [1] replacing part of [12]
     remapped_answer = answer
-    for old_num in sorted(cited_numbers, reverse=True):
-        new_num = old_to_new[old_num]
-        remapped_answer = remapped_answer.replace(f'[{old_num}]', f'[§{new_num}§]')
 
-    # Replace temporary markers with final numbers
-    remapped_answer = re.sub(r'\[§(\d+)§\]', r'[\1]', remapped_answer)
+    # Step 1: Replace comma-separated citations [1, 7, 31] → [§1§, §2§, §4§]
+    def remap_comma_citation(match):
+        nums_str = match.group(1)
+        nums = [n.strip() for n in nums_str.split(',')]
+        remapped = []
+        for n in nums:
+            old_num = int(n)
+            if old_num in old_to_new:
+                remapped.append(f'§{old_to_new[old_num]}§')
+            else:
+                remapped.append(f'§{n}§')
+        return '[' + ', '.join(remapped) + ']'
+
+    remapped_answer = re.sub(
+        r'\[(\d+(?:\s*,\s*\d+)+)\]', remap_comma_citation, remapped_answer
+    )
+
+    # Step 2: Replace single citations [31] → [§4§] (largest first to avoid [1] replacing part of [12])
+    for old_num in sorted(cited_numbers, reverse=True):
+        if old_num in old_to_new:
+            new_num = old_to_new[old_num]
+            remapped_answer = remapped_answer.replace(f'[{old_num}]', f'[§{new_num}§]')
+
+    # Step 3: Replace temporary markers with final numbers
+    remapped_answer = re.sub(r'§(\d+)§', r'\1', remapped_answer)
 
     # Filter and renumber sources
     # Create a lookup by rank
@@ -338,6 +372,38 @@ def render_file_link(file_path: str, source_type: str = "vault") -> str:
         return f"📁 {file_path} • {source_type.title()}"
 
 
+def render_stats_pills(cited_count: int, original_count: int, word_count: int,
+                       time_str: str, tokens_used: int = 0, research_mode: bool = False,
+                       saved: bool = True) -> str:
+    """Render execution statistics as styled pill badges."""
+    if research_mode:
+        sources_text = f"Cited {cited_count}/{original_count}"
+    else:
+        sources_text = str(cited_count)
+
+    pills = [
+        f'<span class="stats-pill pill-sources"><span class="pill-icon">&#x1F4DA;</span> <span class="pill-value">{sources_text}</span> sources</span>',
+        f'<span class="stats-pill pill-words"><span class="pill-icon">&#x270F;</span> <span class="pill-value">{word_count:,}</span> words</span>',
+        f'<span class="stats-pill pill-time"><span class="pill-icon">&#x23F1;</span> <span class="pill-value">{time_str}</span></span>',
+    ]
+
+    if tokens_used > 0:
+        pills.append(
+            f'<span class="stats-pill pill-tokens"><span class="pill-icon">&#x26A1;</span> <span class="pill-value">{tokens_used:,}</span> tokens</span>'
+        )
+
+    return f'<div class="stats-row">{"".join(pills)}</div>'
+
+
+def render_section_header(icon: str, title: str, count: str = "", icon_class: str = "icon-answer") -> str:
+    """Render a styled section header with icon."""
+    count_html = f' <span class="section-count">{count}</span>' if count else ""
+    return f'''<div class="section-header">
+        <div class="section-icon {icon_class}">{icon}</div>
+        <span class="section-title">{title}</span>{count_html}
+    </div>'''
+
+
 def render_copy_buttons(clean_text: str, linked_text: str):
     """Render copy options for clean and linked versions of the answer.
 
@@ -369,31 +435,71 @@ st.set_page_config(
 st.markdown("""
 <style>
 /* ============================================
-   ULTRARAG PREMIUM DESIGN SYSTEM
-   Glass morphism + Modern dark theme
+   ULTRARAG DESIGN SYSTEM v2
+   Refined dark theme · Inter + JetBrains Mono
+   Glass morphism · Swiss-inspired minimalism
    ============================================ */
 
-/* === ROOT VARIABLES === */
+/* === FONTS === */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* === DESIGN TOKENS === */
 :root {
-    --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    --accent-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-    --success-gradient: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-    --glass-bg: rgba(255, 255, 255, 0.05);
-    --glass-border: rgba(255, 255, 255, 0.1);
-    --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-    --text-primary: #ffffff;
-    --text-secondary: rgba(255, 255, 255, 0.7);
-    --text-muted: rgba(255, 255, 255, 0.5);
-    --border-radius: 12px;
-    --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    /* Brand */
+    --brand: #667eea;
+    --brand-light: #818cf8;
+    --brand-dark: #4f46e5;
+    --brand-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    --accent: #10B981;
+    --accent-light: #34D399;
+    --accent-gradient: linear-gradient(135deg, #10B981 0%, #34D399 100%);
+    --danger: #f43f5e;
+    --warning: #f59e0b;
+
+    /* Surfaces */
+    --bg-base: #020617;
+    --bg-surface: #0f172a;
+    --bg-elevated: #1e293b;
+    --bg-glass: rgba(255, 255, 255, 0.03);
+    --bg-glass-hover: rgba(255, 255, 255, 0.06);
+    --bg-glass-active: rgba(255, 255, 255, 0.08);
+
+    /* Borders */
+    --border-subtle: rgba(255, 255, 255, 0.06);
+    --border-default: rgba(255, 255, 255, 0.1);
+    --border-hover: rgba(102, 126, 234, 0.3);
+    --border-focus: rgba(102, 126, 234, 0.5);
+
+    /* Text */
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+
+    /* Shadows */
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2);
+    --shadow-md: 0 4px 16px rgba(0,0,0,0.35);
+    --shadow-lg: 0 8px 32px rgba(0,0,0,0.4);
+    --shadow-glow: 0 0 24px rgba(102, 126, 234, 0.12);
+    --shadow-glow-hover: 0 0 32px rgba(102, 126, 234, 0.2);
+
+    /* Radius */
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-xl: 20px;
+
+    /* Transitions */
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+    --duration-fast: 150ms;
+    --duration-normal: 250ms;
 }
 
-/* === GLOBAL STYLES === */
+/* === GLOBAL === */
 .stApp {
-    background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%) !important;
+    background: linear-gradient(160deg, #020617 0%, #0f172a 40%, #0c1222 100%) !important;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
 }
 
-/* === MAIN CONTENT AREA === */
 .main .block-container {
     padding-top: 1.5rem !important;
     padding-bottom: 2rem !important;
@@ -401,63 +507,84 @@ st.markdown("""
 }
 
 /* === TYPOGRAPHY === */
-/* Main title only gets gradient (not sidebar headers with emojis) */
+h1, h2, h3, h4, h5, h6, p, label, button, input, textarea, select, a,
+.stMarkdown, [data-testid="stTextInput"], [data-testid="stTextArea"],
+[data-testid="stSelectbox"], [data-testid="stRadio"],
+[data-testid="stCheckbox"], [data-testid="stMetric"],
+[data-testid="stAlert"], [data-testid="stCaption"],
+[data-testid="stExpander"] summary > span {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+}
+
+code, pre, [data-testid="stCode"], .stCode {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
+}
+
 .main h1 {
-    background: var(--primary-gradient);
+    background: var(--brand-gradient);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
     font-weight: 700 !important;
+    letter-spacing: -0.02em !important;
 }
 
 h2, h3 {
     color: var(--text-primary) !important;
     font-weight: 600 !important;
+    letter-spacing: -0.01em !important;
 }
 
 .stMarkdown p {
     color: var(--text-secondary) !important;
+    line-height: 1.65 !important;
 }
 
-/* === SIDEBAR STYLING === */
+/* === SIDEBAR === */
 [data-testid="stSidebar"] {
-    background: linear-gradient(180deg, rgba(15, 15, 35, 0.95) 0%, rgba(26, 26, 46, 0.95) 100%) !important;
-    border-right: 1px solid var(--glass-border) !important;
+    background: linear-gradient(180deg, #0f172a 0%, #0a0f1e 100%) !important;
+    border-right: 1px solid var(--border-subtle) !important;
 }
 
 [data-testid="stSidebar"] > div:first-child {
-    padding-top: 1rem !important;
+    padding-top: 0.75rem !important;
 }
 
-/* Sidebar headers - keep emoji colors visible */
 .stSidebar h1, .stSidebar h2, .stSidebar h3 {
-    color: #a78bfa !important;  /* Soft purple */
-    font-size: 1.1rem !important;
-    letter-spacing: 0.5px;
+    color: var(--text-secondary) !important;
+    font-size: 0.7rem !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase !important;
     font-weight: 600 !important;
 }
 
-/* Sidebar dividers */
 .stSidebar hr {
-    border-color: var(--glass-border) !important;
-    margin: 1rem 0 !important;
+    border-color: var(--border-subtle) !important;
+    margin: 0.75rem 0 !important;
 }
 
-/* === GLASS CARDS (Expanders, Containers) === */
+/* Sidebar status badges */
+.stSidebar [data-testid="stAlert"] {
+    padding: 0.5rem 0.75rem !important;
+    font-size: 0.8rem !important;
+}
+
+/* === GLASS CARDS === */
 [data-testid="stExpander"] {
-    background: var(--glass-bg) !important;
-    border: 1px solid var(--glass-border) !important;
-    border-radius: var(--border-radius) !important;
-    backdrop-filter: blur(10px) !important;
-    -webkit-backdrop-filter: blur(10px) !important;
-    box-shadow: var(--glass-shadow) !important;
+    background: var(--bg-glass) !important;
+    border: 1px solid var(--border-default) !important;
+    border-radius: var(--radius-lg) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    box-shadow: var(--shadow-sm) !important;
     overflow: hidden !important;
-    transition: var(--transition) !important;
+    transition: all var(--duration-normal) var(--ease) !important;
 }
 
 [data-testid="stExpander"]:hover {
-    border-color: rgba(102, 126, 234, 0.4) !important;
-    box-shadow: 0 8px 32px rgba(102, 126, 234, 0.15) !important;
+    border-color: var(--border-hover) !important;
+    box-shadow: var(--shadow-md), var(--shadow-glow) !important;
+    background: var(--bg-glass-hover) !important;
 }
 
 [data-testid="stExpander"] summary {
@@ -466,54 +593,62 @@ h2, h3 {
 }
 
 /* === BUTTONS === */
-/* Primary button - gradient */
 button[kind="primary"] {
-    background: var(--primary-gradient) !important;
+    background: var(--brand-gradient) !important;
     border: none !important;
-    border-radius: 8px !important;
+    border-radius: var(--radius-md) !important;
     color: white !important;
     font-weight: 600 !important;
+    font-size: 0.875rem !important;
     padding: 0.6rem 1.5rem !important;
     min-height: 2.5rem !important;
-    transition: var(--transition) !important;
-    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4) !important;
+    transition: all var(--duration-normal) var(--ease) !important;
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3) !important;
+    letter-spacing: 0.01em !important;
 }
 
 button[kind="primary"]:hover {
-    transform: translateY(-2px) !important;
-    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5) !important;
+    transform: translateY(-1px) !important;
+    box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4) !important;
 }
 
-/* Secondary button - glass */
+button[kind="primary"]:active {
+    transform: translateY(0) !important;
+}
+
 button[kind="secondary"] {
-    background: var(--glass-bg) !important;
-    border: 1px solid var(--glass-border) !important;
-    border-radius: 8px !important;
+    background: var(--bg-glass) !important;
+    border: 1px solid var(--border-default) !important;
+    border-radius: var(--radius-md) !important;
     color: var(--text-primary) !important;
-    backdrop-filter: blur(10px) !important;
-    transition: var(--transition) !important;
+    font-size: 0.875rem !important;
+    backdrop-filter: blur(8px) !important;
+    transition: all var(--duration-normal) var(--ease) !important;
 }
 
 button[kind="secondary"]:hover {
-    background: rgba(255, 255, 255, 0.1) !important;
-    border-color: rgba(102, 126, 234, 0.5) !important;
+    background: var(--bg-glass-hover) !important;
+    border-color: var(--border-hover) !important;
 }
 
 /* === INPUT FIELDS === */
 [data-testid="stTextInput"] input,
 [data-testid="stTextArea"] textarea {
-    background: var(--glass-bg) !important;
-    border: 1px solid var(--glass-border) !important;
-    border-radius: 8px !important;
+    background: var(--bg-glass) !important;
+    border: 1px solid var(--border-default) !important;
+    border-radius: var(--radius-md) !important;
     color: var(--text-primary) !important;
-    backdrop-filter: blur(10px) !important;
-    transition: var(--transition) !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 0.95rem !important;
+    backdrop-filter: blur(8px) !important;
+    transition: all var(--duration-normal) var(--ease) !important;
 }
 
 [data-testid="stTextInput"] input:focus,
 [data-testid="stTextArea"] textarea:focus {
-    border-color: #667eea !important;
-    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2) !important;
+    border-color: var(--brand) !important;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15), var(--shadow-glow) !important;
+    background: var(--bg-glass-hover) !important;
 }
 
 [data-testid="stTextInput"] input::placeholder {
@@ -522,10 +657,10 @@ button[kind="secondary"]:hover {
 
 /* === SELECT BOXES === */
 [data-testid="stSelectbox"] > div > div {
-    background: var(--glass-bg) !important;
-    border: 1px solid var(--glass-border) !important;
-    border-radius: 8px !important;
-    backdrop-filter: blur(10px) !important;
+    background: var(--bg-glass) !important;
+    border: 1px solid var(--border-default) !important;
+    border-radius: var(--radius-md) !important;
+    backdrop-filter: blur(8px) !important;
 }
 
 div[data-testid="stSelectbox"] {
@@ -538,85 +673,92 @@ div[data-testid="stSelectbox"] label {
 
 /* === RADIO BUTTONS === */
 div[data-testid="stRadio"] > div {
-    gap: 0.5rem !important;
+    gap: 0.4rem !important;
 }
 
 div[data-testid="stRadio"] label {
-    background: var(--glass-bg) !important;
-    border: 1px solid var(--glass-border) !important;
-    border-radius: 6px !important;
-    padding: 0.4rem 0.8rem !important;
-    font-size: 0.85rem !important;
-    transition: var(--transition) !important;
+    background: var(--bg-glass) !important;
+    border: 1px solid var(--border-default) !important;
+    border-radius: var(--radius-sm) !important;
+    padding: 0.35rem 0.75rem !important;
+    font-size: 0.82rem !important;
+    transition: all var(--duration-fast) var(--ease) !important;
+    cursor: pointer !important;
 }
 
 div[data-testid="stRadio"] label:hover {
-    background: rgba(255, 255, 255, 0.1) !important;
+    background: var(--bg-glass-hover) !important;
+    border-color: var(--border-hover) !important;
 }
 
 div[data-testid="stRadio"] label[data-checked="true"] {
-    background: var(--primary-gradient) !important;
+    background: var(--brand-gradient) !important;
     border-color: transparent !important;
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.25) !important;
 }
 
 /* === CHECKBOXES === */
 div[data-testid="stCheckbox"] label {
     white-space: nowrap !important;
-    font-size: 0.85rem !important;
+    font-size: 0.82rem !important;
     color: var(--text-secondary) !important;
+    cursor: pointer !important;
 }
 
 div[data-testid="stCheckbox"] label span[data-checked="true"] {
-    background: var(--primary-gradient) !important;
+    background: var(--brand-gradient) !important;
 }
 
-/* === SUCCESS/ERROR/INFO ALERTS === */
+/* === ALERTS === */
 [data-testid="stAlert"] {
-    background: var(--glass-bg) !important;
-    border: 1px solid var(--glass-border) !important;
-    border-radius: var(--border-radius) !important;
-    backdrop-filter: blur(10px) !important;
+    background: var(--bg-glass) !important;
+    border: 1px solid var(--border-default) !important;
+    border-radius: var(--radius-lg) !important;
+    backdrop-filter: blur(8px) !important;
 }
 
-/* Success alert */
 div[data-baseweb="notification"][kind="positive"] {
-    background: rgba(17, 153, 142, 0.15) !important;
-    border-left: 4px solid #38ef7d !important;
+    background: rgba(16, 185, 129, 0.08) !important;
+    border-left: 3px solid var(--accent) !important;
 }
 
-/* Error alert */
 div[data-baseweb="notification"][kind="negative"] {
-    background: rgba(245, 87, 108, 0.15) !important;
-    border-left: 4px solid #f5576c !important;
+    background: rgba(244, 63, 94, 0.08) !important;
+    border-left: 3px solid var(--danger) !important;
 }
 
-/* Info alert */
 div[data-baseweb="notification"][kind="info"] {
-    background: rgba(102, 126, 234, 0.15) !important;
-    border-left: 4px solid #667eea !important;
+    background: rgba(102, 126, 234, 0.08) !important;
+    border-left: 3px solid var(--brand) !important;
 }
 
 /* === METRICS === */
 [data-testid="stMetric"] {
-    background: var(--glass-bg) !important;
-    border: 1px solid var(--glass-border) !important;
-    border-radius: var(--border-radius) !important;
+    background: var(--bg-glass) !important;
+    border: 1px solid var(--border-default) !important;
+    border-radius: var(--radius-lg) !important;
     padding: 1rem !important;
-    backdrop-filter: blur(10px) !important;
+    backdrop-filter: blur(8px) !important;
+    transition: all var(--duration-normal) var(--ease) !important;
+}
+
+[data-testid="stMetric"]:hover {
+    border-color: var(--border-hover) !important;
 }
 
 [data-testid="stMetric"] label {
     color: var(--text-muted) !important;
-    font-size: 0.85rem !important;
+    font-size: 0.7rem !important;
     text-transform: uppercase !important;
-    letter-spacing: 1px !important;
+    letter-spacing: 0.08em !important;
 }
 
 [data-testid="stMetric"] [data-testid="stMetricValue"] {
-    background: var(--primary-gradient);
+    background: var(--brand-gradient);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     font-weight: 700 !important;
+    font-family: 'JetBrains Mono', monospace !important;
 }
 
 /* === TABS === */
@@ -624,29 +766,30 @@ div[data-baseweb="notification"][kind="info"] {
     background: transparent !important;
     border: none !important;
     border-bottom: 2px solid transparent !important;
-    color: var(--text-secondary) !important;
-    transition: var(--transition) !important;
+    color: var(--text-muted) !important;
+    font-weight: 500 !important;
+    transition: all var(--duration-fast) var(--ease) !important;
 }
 
 [data-testid="stTabs"] button:hover {
-    color: var(--text-primary) !important;
+    color: var(--text-secondary) !important;
 }
 
 [data-testid="stTabs"] button[aria-selected="true"] {
     color: var(--text-primary) !important;
-    border-bottom-color: #667eea !important;
+    border-bottom-color: var(--brand) !important;
 }
 
 /* === CODE BLOCKS === */
 [data-testid="stCode"] {
-    background: rgba(0, 0, 0, 0.3) !important;
-    border: 1px solid var(--glass-border) !important;
-    border-radius: 8px !important;
+    background: rgba(0, 0, 0, 0.4) !important;
+    border: 1px solid var(--border-subtle) !important;
+    border-radius: var(--radius-md) !important;
 }
 
 /* === SPINNER === */
 [data-testid="stSpinner"] > div {
-    border-top-color: #667eea !important;
+    border-top-color: var(--brand) !important;
 }
 
 /* === SEARCH AREA === */
@@ -658,106 +801,380 @@ div[data-testid="stHorizontalBlock"] {
 /* === QUERY HISTORY (Sidebar) === */
 .stSidebar [data-testid="stCaptionContainer"] {
     margin-bottom: -0.5rem !important;
-    margin-top: 0.5rem !important;
+    margin-top: 0.3rem !important;
     color: var(--text-muted) !important;
+    font-size: 0.7rem !important;
 }
 
 .stSidebar button[kind="secondary"] {
     text-align: left !important;
-    padding: 0.5rem 0.75rem !important;
-    line-height: 1.4 !important;
+    padding: 0.4rem 0.65rem !important;
+    line-height: 1.35 !important;
     white-space: normal !important;
     height: auto !important;
     min-height: unset !important;
-    font-size: 0.8rem !important;
-    margin-bottom: 0.25rem !important;
+    font-size: 0.75rem !important;
+    margin-bottom: 0.15rem !important;
+    border-radius: var(--radius-sm) !important;
 }
 
-/* Sidebar section spacing */
 .stSidebar [data-testid="stVerticalBlockBorderWrapper"] {
     margin-bottom: 0 !important;
 }
 
-/* === SCROLLBAR STYLING === */
+/* === SCROLLBAR === */
 ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 4px;
+    background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-    background: rgba(102, 126, 234, 0.5);
-    border-radius: 4px;
+    background: rgba(148, 163, 184, 0.2);
+    border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: rgba(102, 126, 234, 0.7);
+    background: rgba(148, 163, 184, 0.35);
 }
 
 /* === LINKS === */
 a {
-    color: #667eea !important;
+    color: var(--brand-light) !important;
     text-decoration: none !important;
-    transition: var(--transition) !important;
+    transition: color var(--duration-fast) var(--ease) !important;
 }
 
 a:hover {
-    color: #764ba2 !important;
+    color: var(--accent-light) !important;
 }
 
 /* === DIVIDERS === */
 hr {
     border: none !important;
     height: 1px !important;
-    background: var(--glass-border) !important;
-    margin: 1.5rem 0 !important;
+    background: var(--border-subtle) !important;
+    margin: 1.25rem 0 !important;
 }
 
-/* === DATAFRAMES/TABLES === */
+/* === DATAFRAMES === */
 [data-testid="stDataFrame"] {
-    background: var(--glass-bg) !important;
-    border: 1px solid var(--glass-border) !important;
-    border-radius: var(--border-radius) !important;
+    background: var(--bg-glass) !important;
+    border: 1px solid var(--border-default) !important;
+    border-radius: var(--radius-lg) !important;
     overflow: hidden !important;
 }
 
 /* === PROGRESS BAR === */
 [data-testid="stProgress"] > div > div {
-    background: var(--primary-gradient) !important;
+    background: var(--brand-gradient) !important;
+    border-radius: 4px !important;
 }
 
 /* === TOOLTIP === */
 [data-testid="stTooltipContent"] {
-    background: rgba(15, 15, 35, 0.95) !important;
-    border: 1px solid var(--glass-border) !important;
-    border-radius: 8px !important;
-    backdrop-filter: blur(10px) !important;
+    background: var(--bg-surface) !important;
+    border: 1px solid var(--border-default) !important;
+    border-radius: var(--radius-md) !important;
+    backdrop-filter: blur(12px) !important;
+}
+
+/* === CUSTOM COMPONENTS === */
+
+/* --- Stats Pill Badges --- */
+.stats-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 0.75rem 0 1rem;
+}
+
+.stats-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 100px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    font-family: 'Inter', sans-serif;
+    border: 1px solid var(--border-default);
+    background: var(--bg-glass);
+    color: var(--text-secondary);
+    backdrop-filter: blur(8px);
+}
+
+.stats-pill .pill-value {
+    color: var(--text-primary);
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.76rem;
+}
+
+.stats-pill.pill-sources { border-color: rgba(102, 126, 234, 0.25); }
+.stats-pill.pill-words { border-color: rgba(16, 185, 129, 0.25); }
+.stats-pill.pill-time { border-color: rgba(245, 158, 11, 0.25); }
+.stats-pill.pill-tokens { border-color: rgba(168, 85, 247, 0.25); }
+
+.stats-pill.pill-sources .pill-icon { color: var(--brand-light); }
+.stats-pill.pill-words .pill-icon { color: var(--accent-light); }
+.stats-pill.pill-time .pill-icon { color: var(--warning); }
+.stats-pill.pill-tokens .pill-icon { color: #a855f7; }
+
+/* --- Answer Glass Card --- */
+.answer-card {
+    background: var(--bg-glass);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-xl);
+    padding: 1.75rem 2rem;
+    margin: 1rem 0 1.5rem;
+    backdrop-filter: blur(12px);
+    position: relative;
+    overflow: hidden;
+}
+
+.answer-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--brand-gradient);
+}
+
+.answer-card h3 {
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+}
+
+/* --- Feature Cards (Landing Page) --- */
+.feature-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin: 1.5rem 0;
+}
+
+.feature-card {
+    background: var(--bg-glass);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    transition: all var(--duration-normal) var(--ease);
+    position: relative;
+    overflow: hidden;
+}
+
+.feature-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    opacity: 0;
+    transition: opacity var(--duration-normal) var(--ease);
+}
+
+.feature-card:hover {
+    border-color: var(--border-hover);
+    background: var(--bg-glass-hover);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md), var(--shadow-glow);
+}
+
+.feature-card:hover::before {
+    opacity: 1;
+}
+
+.feature-card:nth-child(1)::before { background: var(--brand-gradient); }
+.feature-card:nth-child(2)::before { background: var(--accent-gradient); }
+.feature-card:nth-child(3)::before { background: linear-gradient(135deg, #f59e0b, #f97316); }
+
+.feature-card .feature-icon {
+    font-size: 1.75rem;
+    margin-bottom: 0.75rem;
+    display: block;
+}
+
+.feature-card .feature-title {
+    color: var(--text-primary);
+    font-weight: 600;
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+    letter-spacing: -0.01em;
+}
+
+.feature-card .feature-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.feature-card .feature-list li {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    padding: 3px 0;
+    padding-left: 16px;
+    position: relative;
+    line-height: 1.5;
+}
+
+.feature-card .feature-list li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 11px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--text-muted);
+}
+
+.feature-card:nth-child(1) .feature-list li::before { background: var(--brand-light); }
+.feature-card:nth-child(2) .feature-list li::before { background: var(--accent-light); }
+.feature-card:nth-child(3) .feature-list li::before { background: #f59e0b; }
+
+/* --- Section Header --- */
+.section-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 1.25rem 0 0.75rem;
+}
+
+.section-header .section-icon {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    font-size: 0.9rem;
+}
+
+.section-header .section-icon.icon-answer {
+    background: rgba(102, 126, 234, 0.12);
+}
+
+.section-header .section-icon.icon-sources {
+    background: rgba(16, 185, 129, 0.12);
+}
+
+.section-header .section-title {
+    color: var(--text-primary);
+    font-size: 1.1rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+.section-header .section-count {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+/* --- Hero Subtitle --- */
+.hero-subtitle {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    font-weight: 400;
+    margin-top: -0.5rem;
+    margin-bottom: 1rem;
+    letter-spacing: 0.01em;
+}
+
+/* --- Sidebar Logo --- */
+.stSidebar img {
+    filter: drop-shadow(0 0 16px rgba(102, 126, 234, 0.2));
+    transition: filter var(--duration-normal) var(--ease);
+}
+
+.stSidebar img:hover {
+    filter: drop-shadow(0 0 24px rgba(102, 126, 234, 0.35));
+}
+
+/* --- Empty State --- */
+.empty-state {
+    text-align: center;
+    padding: 3rem 2rem;
+    color: var(--text-muted);
+}
+
+.empty-state .empty-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    opacity: 0.5;
+}
+
+.empty-state .empty-title {
+    color: var(--text-secondary);
+    font-size: 1.1rem;
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+}
+
+.empty-state .empty-desc {
+    font-size: 0.9rem;
+    max-width: 400px;
+    margin: 0 auto;
+    line-height: 1.6;
 }
 
 /* === ANIMATIONS === */
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
+@keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
 }
 
 [data-testid="stExpander"],
 [data-testid="stAlert"],
 [data-testid="stMetric"] {
-    animation: fadeIn 0.3s ease-out;
+    animation: fadeInUp 0.35s var(--ease) both;
 }
 
-/* === LOGO GLOW EFFECT === */
-.stSidebar img {
-    filter: drop-shadow(0 0 20px rgba(102, 126, 234, 0.3));
-    transition: var(--transition);
+/* Stagger animation for expanders */
+[data-testid="stExpander"]:nth-child(2) { animation-delay: 0.05s; }
+[data-testid="stExpander"]:nth-child(3) { animation-delay: 0.1s; }
+[data-testid="stExpander"]:nth-child(4) { animation-delay: 0.15s; }
+[data-testid="stExpander"]:nth-child(5) { animation-delay: 0.2s; }
+
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
 }
 
-.stSidebar img:hover {
-    filter: drop-shadow(0 0 30px rgba(102, 126, 234, 0.5));
+/* === RESPONSIVE === */
+@media (max-width: 768px) {
+    .feature-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .answer-card {
+        padding: 1.25rem;
+    }
+
+    .stats-row {
+        gap: 6px;
+    }
+
+    .stats-pill {
+        font-size: 0.72rem;
+        padding: 4px 10px;
+    }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -1085,8 +1502,8 @@ def llm_usage_dialog():
 
 
 def main():
-    st.title("🧠 UltraRAG - Obsidian Knowledge Assistant")
-    st.markdown("World-class RAG system for your personal knowledge base")
+    st.title("UltraRAG")
+    st.markdown('<p class="hero-subtitle">Knowledge retrieval for your Obsidian vault</p>', unsafe_allow_html=True)
     
     # Sidebar for configuration
     with st.sidebar:
@@ -1161,7 +1578,7 @@ def main():
         # Conversations section
         if st.session_state.rag and st.session_state.indexed:
             st.divider()
-            st.subheader("💬 AI Conversations")
+            st.subheader("AI Conversations")
 
             # Check for conversations config
             config = st.session_state.rag.config
@@ -1194,7 +1611,7 @@ def main():
         # RAPTOR section
         if st.session_state.rag and st.session_state.indexed:
             st.divider()
-            st.subheader("🌳 RAPTOR Summaries")
+            st.subheader("RAPTOR Summaries")
 
             config = st.session_state.rag.config
             has_raptor = st.session_state.rag.raptor_index_exists()
@@ -1239,7 +1656,7 @@ def main():
             # Truncate model names for compact display
             emb_short = config.embedding.model.replace('voyage-', '').replace('-lite', 'L')
             llm_short = config.llm.model[:12] + '...' if len(config.llm.model) > 12 else config.llm.model
-            st.caption(f"📊 {emb_short} | {config.vector_db.db_type.upper()} | {llm_short}")
+            st.caption(f"{emb_short} / {config.vector_db.db_type.upper()} / {llm_short}")
 
             if st.session_state.indexed:
                 auto_note = " (auto)" if st.session_state.autoload_attempted else ""
@@ -1273,7 +1690,7 @@ def main():
         
         # Query history (persistent, clickable)
         st.divider()
-        st.subheader("📜 Query History")
+        st.subheader("History")
         persistent_history = load_query_history()
         if persistent_history:
             # Show most recent 15 queries (reversed for newest first)
@@ -1291,7 +1708,7 @@ def main():
 
                 # Use container for visual grouping
                 with st.container():
-                    st.caption(f"🕐 {time_str}")
+                    st.caption(time_str)
                     if st.button(query_short, key=f"hist_{entry.get('id', entry['timestamp'])}", use_container_width=True):
                         st.session_state.loaded_history_result = entry
                         st.rerun()
@@ -1300,32 +1717,50 @@ def main():
     
     # Main content area
     if not st.session_state.indexed:
-        st.info("👈 Initialize the system and index your vault to get started")
-        
-        # Show features
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.subheader("🎯 Smart Retrieval")
-            st.write("- Semantic search")
-            st.write("- Wikilink traversal")
-            st.write("- Temporal filtering")
-        
-        with col2:
-            st.subheader("🧠 Advanced AI")
-            st.write("- Gemini 3 Flash")
-            st.write("- Thinking mode")
-            st.write("- Context-aware")
-        
-        with col3:
-            st.subheader("📊 High Quality")
-            st.write("- Voyage embeddings")
-            st.write("- Smart reranking")
-            st.write("- Source citations")
+        st.markdown("""
+        <div class="empty-state">
+            <div class="empty-icon">&#x1F50D;</div>
+            <div class="empty-title">Initialize your vault to get started</div>
+            <div class="empty-desc">Use the sidebar to load an existing index or create a new one from your Obsidian vault.</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Feature cards
+        st.markdown("""
+        <div class="feature-grid">
+            <div class="feature-card">
+                <span class="feature-icon">&#x1F3AF;</span>
+                <div class="feature-title">Smart Retrieval</div>
+                <ul class="feature-list">
+                    <li>Semantic search with reranking</li>
+                    <li>Wikilink graph traversal</li>
+                    <li>Temporal filtering</li>
+                </ul>
+            </div>
+            <div class="feature-card">
+                <span class="feature-icon">&#x2728;</span>
+                <div class="feature-title">Advanced AI</div>
+                <ul class="feature-list">
+                    <li>Gemini 3 Flash with context caching</li>
+                    <li>Research mode with gap analysis</li>
+                    <li>Self-correcting retrieval</li>
+                </ul>
+            </div>
+            <div class="feature-card">
+                <span class="feature-icon">&#x1F4CA;</span>
+                <div class="feature-title">High Quality</div>
+                <ul class="feature-list">
+                    <li>Voyage AI embeddings</li>
+                    <li>Cross-encoder reranking</li>
+                    <li>Inline source citations</li>
+                </ul>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
     
     else:
         # Query interface
-        st.subheader("💭 Ask a Question")
+        st.subheader("Ask a Question")
 
         query = st.text_input(
             "What would you like to know from your vault?",
@@ -1337,7 +1772,7 @@ def main():
         # Search controls - Row 1: Button + Search type
         row1_col1, row1_col2 = st.columns([1, 4])
         with row1_col1:
-            search_button = st.button("🔍 Search", type="primary", use_container_width=True)
+            search_button = st.button("Search", type="primary", use_container_width=True)
         with row1_col2:
             search_type = st.radio(
                 "Search type:",
@@ -1413,54 +1848,48 @@ def main():
             )
             cited_count = len(filtered_sources)
 
-            # Display execution summary
+            # Display execution stats as pill badges
             word_count = len(remapped_answer.split())
             time_str = format_duration(exec_time)
-            tokens_str = f" • **{tokens_used:,} tokens**" if tokens_used > 0 else ""
-            sources_str = f"**Cited {cited_count} of {original_source_count} sources**" if research_mode else f"**{cited_count} sources**"
-            st.markdown(
-                f"{sources_str} "
-                f"→ **{word_count:,} words** in **{time_str}**{tokens_str} "
-                f"• *saved to history*"
-            )
+            st.markdown(render_stats_pills(
+                cited_count, original_source_count, word_count, time_str,
+                tokens_used, research_mode
+            ), unsafe_allow_html=True)
 
-            # Display answer with clickable citation links (using remapped answer)
-            st.markdown("### 📝 Answer")
+            # Answer section
+            st.markdown(render_section_header("&#x1F4DD;", "Answer", icon_class="icon-answer"), unsafe_allow_html=True)
             answer_with_links = linkify_citations(remapped_answer)
-            st.markdown(answer_with_links, unsafe_allow_html=True)
+            st.markdown(f'<div class="answer-card">{answer_with_links}</div>', unsafe_allow_html=True)
 
-            # Build source map for wikilink replacement (using filtered sources)
+            # Build source map and copy buttons
             source_map = {
                 source['rank']: source['title']
                 for source in filtered_sources
             }
-
-            # Generate copy versions (using remapped answer)
             clean_text = strip_citations(remapped_answer)
             linked_text = format_with_wikilink_footnotes(remapped_answer, source_map)
             render_copy_buttons(clean_text, linked_text)
 
-            # Show research summary for research mode
+            # Research details
             if research_mode and 'research_summary' in result:
-                with st.expander("🔬 Research Details", expanded=False):
+                with st.expander("Research Details", expanded=False):
                     st.text(result['research_summary'])
 
-            # Show gap analyses for research mode (valuable insights from iterative retrieval)
             if research_mode and result.get('gap_analyses_markdown'):
-                with st.expander("🧠 Gap Analysis Insights", expanded=False):
+                with st.expander("Gap Analysis Insights", expanded=False):
                     st.markdown(result['gap_analyses_markdown'])
 
-            # Show source summary for federated queries
+            # Federated source summary
             if search_scope == "🔀 Both" and 'source_summary' in result:
                 summary = result.get('source_summary', {})
                 if summary:
                     by_type = summary.get('by_type', {})
                     vault_count = by_type.get('vault', 0)
                     conv_count = by_type.get('conversations', 0)
-                    st.info(f"📊 Sources: {vault_count} from vault, {conv_count} from conversations")
+                    st.info(f"Sources: {vault_count} from vault, {conv_count} from conversations")
 
-            # Display only cited sources (filtered and renumbered)
-            st.markdown(f"### 📚 Sources ({cited_count})")
+            # Sources section
+            st.markdown(render_section_header("&#x1F4DA;", "Sources", str(cited_count), "icon-sources"), unsafe_allow_html=True)
             for source in filtered_sources:
                 source_type = source.get('source_type', 'vault')
                 type_icon = "📓" if source_type == 'vault' else "💬"
@@ -1501,34 +1930,33 @@ def main():
                 )
                 cited_count = len(filtered_sources)
                 word_count = len(remapped_answer.split())
-                st.markdown(f"**{cited_count} sources** → **{word_count:,} words**")
+                st.markdown(render_stats_pills(
+                    cited_count, len(original_sources), word_count, "from history",
+                    research_mode=False
+                ), unsafe_allow_html=True)
 
-                # Display answer with clickable citations (using remapped answer)
-                st.markdown("### 📝 Answer")
+                # Answer section
+                st.markdown(render_section_header("&#x1F4DD;", "Answer", icon_class="icon-answer"), unsafe_allow_html=True)
                 answer_with_links = linkify_citations(remapped_answer)
-                st.markdown(answer_with_links, unsafe_allow_html=True)
+                st.markdown(f'<div class="answer-card">{answer_with_links}</div>', unsafe_allow_html=True)
 
-                # Build source map for wikilinks (using filtered sources)
+                # Copy buttons
                 source_map = {
                     source['rank']: source['title']
                     for source in filtered_sources
                 }
-
-                # Generate copy versions (using remapped answer)
                 clean_text = strip_citations(remapped_answer)
                 linked_text = format_with_wikilink_footnotes(remapped_answer, source_map)
-
-                # Render copy buttons
                 render_copy_buttons(clean_text, linked_text)
 
-                # Show gap analyses if available (from research mode)
+                # Gap analyses
                 if entry.get('gap_analyses_markdown'):
-                    with st.expander("🧠 Gap Analysis Insights", expanded=False):
+                    with st.expander("Gap Analysis Insights", expanded=False):
                         st.markdown(entry['gap_analyses_markdown'])
 
-                # Display only cited sources (filtered and renumbered)
+                # Sources section
                 if filtered_sources:
-                    st.markdown(f"### 📚 Sources ({cited_count})")
+                    st.markdown(render_section_header("&#x1F4DA;", "Sources", str(cited_count), "icon-sources"), unsafe_allow_html=True)
                     for source in filtered_sources:
                         source_type = source.get('source_type', 'vault')
                         type_icon = "📓" if source_type == 'vault' else "💬"
@@ -1625,67 +2053,56 @@ def main():
                             )
                             cited_count = len(filtered_sources)
 
-                            # Display execution summary with history confirmation
+                            # Stats pills
                             time_str = format_duration(exec_time)
-                            tokens_str = f" • **{tokens_used:,} tokens**" if tokens_used > 0 else ""
-                            sources_str = f"**Cited {cited_count} of {original_source_count} sources**" if research_mode else f"**{cited_count} sources**"
-                            st.markdown(
-                                f"{sources_str} "
-                                f"→ **{word_count:,} words** in **{time_str}**{tokens_str} "
-                                f"• *saved to history*"
-                            )
+                            st.markdown(render_stats_pills(
+                                cited_count, original_source_count, word_count, time_str,
+                                tokens_used, research_mode
+                            ), unsafe_allow_html=True)
 
-                            # Display answer with clickable citation links (using remapped answer)
-                            st.markdown("### 📝 Answer")
+                            # Answer section
+                            st.markdown(render_section_header("&#x1F4DD;", "Answer", icon_class="icon-answer"), unsafe_allow_html=True)
                             answer_with_links = linkify_citations(remapped_answer)
-                            st.markdown(answer_with_links, unsafe_allow_html=True)
+                            st.markdown(f'<div class="answer-card">{answer_with_links}</div>', unsafe_allow_html=True)
 
-                            # Build source map for wikilink replacement (using filtered sources)
+                            # Copy buttons
                             source_map = {
                                 source['rank']: source['title']
                                 for source in filtered_sources
                             }
-
-                            # Generate copy versions (using remapped answer)
                             clean_text = strip_citations(remapped_answer)
                             linked_text = format_with_wikilink_footnotes(remapped_answer, source_map)
-
-                            # Render copy buttons
                             render_copy_buttons(clean_text, linked_text)
 
-                            # Show research summary for research mode
+                            # Research details
                             if research_mode and 'research_summary' in result:
-                                with st.expander("🔬 Research Details", expanded=False):
+                                with st.expander("Research Details", expanded=False):
                                     st.text(result['research_summary'])
 
-                            # Show gap analyses for research mode (valuable insights from iterative retrieval)
                             if research_mode and result.get('gap_analyses_markdown'):
-                                with st.expander("🧠 Gap Analysis Insights", expanded=False):
+                                with st.expander("Gap Analysis Insights", expanded=False):
                                     st.markdown(result['gap_analyses_markdown'])
 
-                            # Show source summary for federated queries
+                            # Federated source summary
                             if search_scope == "🔀 Both" and 'source_summary' in result:
                                 summary = result.get('source_summary', {})
                                 if summary:
                                     by_type = summary.get('by_type', {})
                                     vault_count = by_type.get('vault', 0)
                                     conv_count = by_type.get('conversations', 0)
-                                    st.info(f"📊 Sources: {vault_count} from vault, {conv_count} from conversations")
+                                    st.info(f"Sources: {vault_count} from vault, {conv_count} from conversations")
 
-                            # Display only cited sources (filtered and renumbered)
-                            st.markdown(f"### 📚 Sources ({cited_count})")
+                            # Sources section
+                            st.markdown(render_section_header("&#x1F4DA;", "Sources", str(cited_count), "icon-sources"), unsafe_allow_html=True)
                             for source in filtered_sources:
                                 source_type = source.get('source_type', 'vault')
-                                type_icon = "📓" if source_type == 'vault' else "💬"
-                                # Add anchor ID for citation linking
+                                type_icon = "&#x1F4D3;" if source_type == 'vault' else "&#x1F4AC;"
                                 st.markdown(f'<div id="source-{source["rank"]}"></div>', unsafe_allow_html=True)
                                 with st.expander(
-                                    f"**{source['rank']}. {type_icon} {source['title']}** (score: {source['score']:.3f})"
+                                    f"**{source['rank']}. {source['title']}** — {source['score']:.3f}"
                                 ):
-                                    # Render file path as clickable Obsidian link
                                     file_link_html = render_file_link(source['file'], source_type)
-                                    st.markdown(f'<small style="color: gray;">{file_link_html}</small>', unsafe_allow_html=True)
-                                    # Render markdown with cleaned excerpt
+                                    st.markdown(f'<small style="color: #64748b;">{file_link_html}</small>', unsafe_allow_html=True)
                                     cleaned = clean_excerpt_for_display(source['excerpt'])
                                     st.markdown(cleaned)
 
@@ -1693,16 +2110,14 @@ def main():
                             # Just retrieve relevant notes
                             notes = st.session_state.rag.search_notes(query, top_k=max_sources, date_filter=date_filter)
 
-                            st.markdown(f"### 📚 Relevant Notes ({len(notes)} found)")
+                            st.markdown(render_section_header("&#x1F4DA;", "Relevant Notes", str(len(notes)), "icon-sources"), unsafe_allow_html=True)
                             for note in notes:
                                 source_type = note.get('source_type', 'vault')
-                                type_icon = "📓" if source_type == 'vault' else "💬"
                                 with st.expander(
-                                    f"**{note['rank']}. {type_icon} {note['title']}** (score: {note['score']:.3f})"
+                                    f"**{note['rank']}. {note['title']}** — {note['score']:.3f}"
                                 ):
-                                    # Render file path as clickable Obsidian link
                                     file_link_html = render_file_link(note['file'], source_type)
-                                    st.markdown(f'<small style="color: gray;">{file_link_html}</small>', unsafe_allow_html=True)
+                                    st.markdown(f'<small style="color: #64748b;">{file_link_html}</small>', unsafe_allow_html=True)
                                     cleaned = clean_excerpt_for_display(note['excerpt'])
                                     st.markdown(cleaned)
 
@@ -1710,7 +2125,7 @@ def main():
                         st.error(f"❌ Error: {e}")
         
         # Example queries
-        with st.expander("💡 Example Queries"):
+        with st.expander("Example Queries"):
             st.markdown("""
             - What are my thoughts on [topic]?
             - Show me all notes related to [project]
