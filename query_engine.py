@@ -8,6 +8,7 @@ from observability import trace_chain, trace_retrieval, is_tracing_enabled
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.retrievers import VectorIndexRetriever, BaseRetriever
 from llama_index.core.postprocessor import SimilarityPostprocessor
+from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.response_synthesizers import get_response_synthesizer
 from llama_index.core.prompts import PromptTemplate
 from llama_index.core.schema import NodeWithScore, QueryBundle
@@ -65,6 +66,31 @@ class BilingualStemmer:
             else:
                 result.append(self._english.stemWord(word))
         return result
+
+
+class SourceNumberingPostprocessor(BaseNodePostprocessor):
+    """Prepend [N] source numbering to node text for accurate LLM citations.
+
+    Must be the LAST postprocessor in the chain (after reranking/filtering)
+    so numbering reflects the final node order.
+    """
+
+    def _postprocess_nodes(
+        self, nodes: List[NodeWithScore], query_bundle: Optional[QueryBundle] = None
+    ) -> List[NodeWithScore]:
+        for i, node_with_score in enumerate(nodes, 1):
+            inner_node = node_with_score.node
+            title = inner_node.metadata.get('title', 'Unknown')
+            source_type = inner_node.metadata.get('source_type', 'vault')
+            # Store original text for excerpt display
+            if '_original_text' not in inner_node.metadata:
+                inner_node.metadata['_original_text'] = inner_node.text
+            # Prepend source number and title for LLM context
+            inner_node.text = (
+                f"[{i}] Source: {title} ({source_type})\n"
+                f"{inner_node.metadata.get('_original_text', inner_node.text)}"
+            )
+        return nodes
 
 
 # Import additional dependencies for caching
@@ -661,6 +687,10 @@ class RAGQueryEngine:
             )
         )
 
+        # Add source numbering LAST so [1], [2], [3]... match final node order
+        # This ensures LLM citations correspond to actual source positions
+        node_postprocessors.append(SourceNumberingPostprocessor())
+
         # Configure response synthesizer with custom prompts
         qa_prompt = PromptTemplate(PTCF_TEMPLATE)
         refine_prompt = PromptTemplate(REFINE_TEMPLATE)
@@ -920,6 +950,9 @@ class HybridQueryEngine:
             logger.info(f"Similarity filter enabled: cutoff={self.config.retrieval.similarity_threshold}")
         else:
             logger.info("Similarity filter disabled (reranker handles relevance)")
+
+        # Add source numbering LAST so [1], [2], [3]... match final node order
+        node_postprocessors.append(SourceNumberingPostprocessor())
 
         # Configure response synthesizer with custom prompts
         qa_prompt = PromptTemplate(PTCF_TEMPLATE)

@@ -752,12 +752,14 @@ class UltraRAG:
         nodes_to_format = source_nodes if max_sources is None else source_nodes[:max_sources]
 
         for idx, node in enumerate(nodes_to_format, 1):
+            # Use original text (without [N] prefix) for display excerpts
+            display_text = node.metadata.get('_original_text', node.text)
             sources.append({
                 'rank': idx,
                 'title': node.metadata.get('title', 'Unknown'),
                 'file': node.metadata.get('file_name', 'Unknown'),
                 'score': node.score,
-                'excerpt': node.text[:1500] + "..." if len(node.text) > 1500 else node.text,
+                'excerpt': display_text[:1500] + "..." if len(display_text) > 1500 else display_text,
                 'source_type': node.metadata.get('source_type', 'vault'),
                 'retrieval_source': node.metadata.get('retrieval_source', 'vault')
             })
