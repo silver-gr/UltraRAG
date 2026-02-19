@@ -25,7 +25,7 @@ import indexing
 import retrieval
 from models import (
     QueryResult, ResearchResult, SourceNode, IndexSource, SourceType,
-    IndexNotFoundError,
+    IndexNotFoundError, BookFilter, _normalize_category,
 )
 
 logger = logging.getLogger("ultrarag.cli")
@@ -247,9 +247,21 @@ def cmd_query(args):
     config = load_config()
 
     if args.source == "all":
-        sources_to_load = ["vault", "conversations"]
+        sources_to_load = ["vault", "conversations", "books"]
+    elif args.source == "books":
+        sources_to_load = ["books"]
     else:
         sources_to_load = [args.source]
+
+    # Build BookFilter from CLI flags
+    book_filter = None
+    cat = getattr(args, "category", None)
+    auth = getattr(args, "author", None)
+    if cat or auth:
+        book_filter = BookFilter(
+            categories=[_normalize_category(c) for c in cat.split(",")] if cat else None,
+            authors=[a.strip() for a in auth.split(",")] if auth else None,
+        )
 
     # Suppress stdout during init — Voyage tracker prints usage stats
     with _SuppressStdout():
@@ -266,7 +278,7 @@ def cmd_query(args):
         sys.exit(1)
 
     try:
-        if len(indexes) == 1:
+        if len(indexes) == 1 and not book_filter:
             index = list(indexes.values())[0].index
             result = retrieval.query(
                 args.query, index, config, mode=args.mode,
@@ -274,6 +286,7 @@ def cmd_query(args):
         else:
             result = retrieval.federated_query(
                 args.query, indexes, config, mode=args.mode,
+                book_filter=book_filter,
             )
 
         output = {
@@ -296,6 +309,36 @@ def cmd_query(args):
             "answer": "",
             "sources": [],
             "total_sources": 0,
+        }, args.format))
+        sys.exit(1)
+
+
+def cmd_enrich(args):
+    """Run book metadata enrichment pipeline."""
+    config = load_config()
+
+    if getattr(args, "clear_cache", False):
+        cache_path = config.books.metadata_cache_path
+        if cache_path and cache_path.exists():
+            from calibre_metadata import BookMetadataCache
+            cache = BookMetadataCache(cache_path)
+            cache.clear()
+            cache.save()
+            logger.info("Cache cleared")
+
+    try:
+        stats = indexing.enrich_books(config)
+        print(_format_output({
+            "command": "enrich",
+            "status": "success",
+            **stats,
+        }, args.format))
+    except Exception as e:
+        logger.error("Enrichment failed: %s", e)
+        print(_format_output({
+            "command": "enrich",
+            "status": "error",
+            "error": str(e),
         }, args.format))
         sys.exit(1)
 
@@ -362,7 +405,7 @@ def main():
     qp.add_argument("--query", "-q", required=True, help="Query string")
     qp.add_argument(
         "--source", "-s",
-        choices=["vault", "conversations", "all"],
+        choices=["vault", "conversations", "books", "all"],
         default="vault",
         help="Source to query (default: vault)",
     )
@@ -371,6 +414,28 @@ def main():
         choices=["simple", "hybrid"],
         default="hybrid",
         help="Query mode (default: hybrid)",
+    )
+    qp.add_argument(
+        "--category", "-c",
+        default=None,
+        help="Filter books by category (comma-separated for multiple)",
+    )
+    qp.add_argument(
+        "--author", "-a",
+        default=None,
+        help="Filter books by author (comma-separated for multiple)",
+    )
+
+    # --- enrich ---
+    ep = subparsers.add_parser(
+        "enrich",
+        parents=[common],
+        help="Run book metadata enrichment (Calibre + web)",
+    )
+    ep.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Clear existing cache before enrichment",
     )
 
     # --- status ---
@@ -391,6 +456,8 @@ def main():
         cmd_research(args)
     elif args.command == "query":
         cmd_query(args)
+    elif args.command == "enrich":
+        cmd_enrich(args)
     elif args.command == "status":
         cmd_status(args)
     else:

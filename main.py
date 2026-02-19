@@ -40,6 +40,8 @@ from models import (
     ResearchResult as ModelsResearchResult,
     IndexNotFoundError,
     ConfigurationError,
+    BookFilter,
+    _normalize_category,
 )
 
 # Configure logging (with guard to prevent duplicate handlers in Streamlit)
@@ -1244,7 +1246,7 @@ class UltraRAG:
             logger.error(f"Failed to load books index: {e}", exc_info=True)
             return False
 
-    def _setup_federated_engine(self):
+    def _setup_federated_engine(self, book_filter=None):
         """Setup federated query engine for both indexes."""
         if self.index is None:
             logger.warning("Vault index not available for federated engine")
@@ -1287,11 +1289,21 @@ class UltraRAG:
                 sources=sources,
                 config=self.config,
                 reranker=self.reranker,
-                query_transformer=self.query_transformer
+                query_transformer=self.query_transformer,
+                book_filter=book_filter,
             )
             print(f"Federated engine ready with {len(sources)} sources")
         else:
             logger.info("Only one source available, federated engine not needed")
+
+    def get_book_categories(self) -> list[dict]:
+        """Get category catalog from in-memory books nodes (no LanceDB scan)."""
+        from collections import Counter
+        cats = Counter()
+        for node in self.books_nodes or []:
+            for cat in node.metadata.get("book_categories", []):
+                cats[cat] += 1
+        return [{"name": k, "count": v} for k, v in cats.most_common()]
 
     def query_federated(
         self,
@@ -1299,7 +1311,8 @@ class UltraRAG:
         source_filter: Optional[List[str]] = None,
         return_sources: bool = True,
         max_sources: int = None,
-        date_filter: DateFilterPreset = "all_time"
+        date_filter: DateFilterPreset = "all_time",
+        book_filter: Optional[BookFilter] = None,
     ):
         """Query both vault and conversations with federated retrieval.
 
@@ -1311,6 +1324,7 @@ class UltraRAG:
             return_sources: Include source information in response
             max_sources: Maximum sources to include (None = use rerank_top_n)
             date_filter: Date filter preset to apply
+            book_filter: Optional BookFilter for category/author filtering on books
         """
         if self.federated_engine is None:
             # Fallback to regular query if no federated engine
@@ -1321,10 +1335,24 @@ class UltraRAG:
                 logger.warning("Federated engine not available, using standard query")
                 return self.query(query_str, return_sources=return_sources, max_sources=max_sources, date_filter=date_filter)
 
+        # Rebuild engine when book_filter changes (including clearing)
+        if book_filter != getattr(self, '_active_book_filter', None):
+            self._active_book_filter = book_filter
+            self._setup_federated_engine(book_filter=book_filter)
+
         if date_filter != "all_time":
             logger.info(f"Federated query with date filter: {date_filter}")
 
-        print(f"\n🔍 Federated Query: {query_str}")
+        filter_desc = ""
+        if book_filter:
+            parts = []
+            if book_filter.categories:
+                parts.append(f"categories={book_filter.categories}")
+            if book_filter.authors:
+                parts.append(f"authors={book_filter.authors}")
+            filter_desc = f" [filter: {', '.join(parts)}]"
+
+        print(f"\n🔍 Federated Query: {query_str}{filter_desc}")
         print("Searching vault and conversations...\n")
 
         try:
@@ -2245,11 +2273,14 @@ def main():
     print("  'quit' - exit")
     print("  'usage' - check token usage")
     print("  'conv' - index AI conversations")
+    print("  'enrich' - run book metadata enrichment (Calibre + web)")
     print("  'raptor' - build RAPTOR hierarchical index")
     print("  'cache' - invalidate disk cache (force reload)")
     print("  '@vault <query>' - search vault only")
     print("  '@conv <query>' - search conversations only")
     print("  '@all <query>' - search both (federated)")
+    print("  '@books:category <query>' - search books filtered by category")
+    print("  '@raptor-books <query>' - 2-stage RAPTOR: find relevant books, then search within them")
     print("  '@research <query>' - multi-step research mode (3-5x slower, higher accuracy)")
     print("  '@raptor <query>' - search using RAPTOR hierarchical summaries")
     print("="*50 + "\n")
@@ -2287,6 +2318,21 @@ def main():
                 rag.index_books()
             continue
 
+        if query.lower() == 'enrich':
+            # Run book metadata enrichment
+            print("\nRunning book metadata enrichment...")
+            try:
+                stats = indexing_module.enrich_books(rag.config)
+                print(f"\nEnrichment complete:")
+                print(f"  Total books: {stats['total']}")
+                print(f"  Calibre matched: {stats['calibre_matched']} (avg confidence {stats['avg_confidence']:.2f})")
+                print(f"  Web enriched: {stats['web_enriched']}")
+                print(f"  No match (filename): {stats['no_match']}")
+                print(f"  Already cached: {stats['already_cached']}")
+            except Exception as e:
+                print(f"Enrichment failed: {e}")
+            continue
+
         if query.lower() == 'cache':
             # Invalidate cache
             from vector_store import invalidate_cache
@@ -2318,13 +2364,59 @@ def main():
                 print(f"\n🔬 Research mode enabled (this may take 30-60 seconds)...")
                 result = rag.query_research(query_text)
                 mode = "research"
+            elif query.startswith('@books:'):
+                # @books:category query — filter by category
+                rest = query[7:]  # after "@books:"
+                if ' ' in rest:
+                    category, query_text = rest.split(' ', 1)
+                else:
+                    print("Usage: @books:category_name your query")
+                    continue
+                if rag.books_index is None:
+                    print("Books index not loaded. Run 'books' command first.")
+                    continue
+                bf = BookFilter(categories=[_normalize_category(category)])
+                result = rag.query_federated(query_text, source_filter=["books"], book_filter=bf)
+                mode = "books"
             elif query.startswith('@books '):
                 query_text = query[7:]
                 if rag.books_index is None:
-                    print("❌ Books index not loaded. Run 'books' command first.")
+                    print("Books index not loaded. Run 'books' command first.")
                     continue
                 result = rag.query_federated(query_text, source_filter=["books"])
                 mode = "books"
+            elif query.startswith('@raptor-books '):
+                query_text = query[14:]
+                if rag.books_index is None:
+                    print("Books index not loaded. Run 'books' command first.")
+                    continue
+                print(f"\nRAPTOR-Books 2-stage query...")
+                try:
+                    from book_raptor import BookRaptorManager
+                    from calibre_metadata import BookMetadataCache
+                    cache_path = rag.config.books.metadata_cache_path
+                    if not Path(cache_path).exists():
+                        print("No metadata cache found. Run 'enrich' first.")
+                        continue
+                    br = BookRaptorManager(
+                        embed_model=Settings.embed_model,
+                        llm=Settings.llm,
+                    )
+                    if not br.index_exists():
+                        print("Building book-summary RAPTOR index...")
+                        cache = BookMetadataCache(Path(cache_path))
+                        br.build_summary_index(cache)
+                    else:
+                        br.load_index()
+                    raptor_result = br.two_stage_query(query_text, rag.books_index, rag.config)
+                    result = {
+                        'answer': raptor_result.answer,
+                        'sources': [{'file_path': s.file_path, 'file_name': s.file_name, 'score': s.score, 'excerpt': s.excerpt, 'source_type': s.source_type} for s in raptor_result.sources],
+                    }
+                    mode = "raptor-books"
+                except Exception as e:
+                    print(f"RAPTOR-Books query failed: {e}")
+                    continue
             elif query.startswith('@raptor '):
                 query_text = query[8:]
                 print(f"\n🌳 RAPTOR mode enabled...")
