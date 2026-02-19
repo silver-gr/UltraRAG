@@ -30,7 +30,7 @@ class TestQuery:
         """
         from models import QueryResult
 
-        with patch('retrieval._get_llm', return_value=mock_llm):
+        with patch('retrieval.get_llm', return_value=mock_llm):
             from retrieval import query
 
             # Create minimal mock index
@@ -70,7 +70,7 @@ class TestQuery:
         """
         from models import QueryResult
 
-        with patch('retrieval._get_llm', return_value=mock_llm):
+        with patch('retrieval.get_llm', return_value=mock_llm):
             from retrieval import query
 
             mock_index = MagicMock()
@@ -97,7 +97,7 @@ class TestFederatedQuery:
         """
         from models import QueryResult, IndexSource, SourceType
 
-        with patch('retrieval._get_llm', return_value=mock_llm):
+        with patch('retrieval.get_llm', return_value=mock_llm):
             with patch('retrieval._federated_retrieve') as mock_retrieve:
                 mock_retrieve.return_value = []
 
@@ -149,7 +149,7 @@ class TestResearch:
         """
         from models import ResearchResult
 
-        with patch('retrieval._get_llm', return_value=mock_llm):
+        with patch('retrieval.get_llm', return_value=mock_llm):
             with patch('retrieval._do_research') as mock_research:
                 mock_research.return_value = ResearchResult(
                     answer="Test research answer",

@@ -29,7 +29,7 @@ class TestFullWorkflow:
             assert index is not None, "index_vault() should return an index"
 
             # Query (simple mode to avoid LLM dependency)
-            with patch('retrieval._get_llm') as mock_llm:
+            with patch('retrieval.get_llm') as mock_llm:
                 mock_response = type('Response', (), {
                     'response': 'RAG combines retrieval with generation.',
                     'source_nodes': [],
@@ -65,7 +65,7 @@ class TestFullWorkflow:
             assert loaded is not None, "load_index() should return the index"
 
             # Then query
-            with patch('retrieval._get_llm') as mock_llm:
+            with patch('retrieval.get_llm') as mock_llm:
                 mock_response = type('Response', (), {
                     'response': 'Test response',
                     'source_nodes': [],
@@ -112,7 +112,7 @@ class TestModelsIntegration:
         from models import QueryResult, IndexNotFoundError
         from unittest.mock import MagicMock
 
-        with patch('retrieval._get_llm', return_value=mock_llm):
+        with patch('retrieval.get_llm', return_value=mock_llm):
             mock_index = MagicMock()
             mock_response = MagicMock()
             mock_response.response = "Test answer"

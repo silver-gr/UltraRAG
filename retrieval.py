@@ -20,7 +20,7 @@ from config import RAGConfig, load_config
 from models import (
     QueryResult, ResearchResult, SourceNode, IndexSource, SourceType,
     IndexNotFoundError, LLMRateLimitError,
-    QueryMode, SourceFilter,
+    QueryMode, SourceFilter, BookFilter,
 )
 
 logger = logging.getLogger("ultrarag.retrieval")
@@ -70,7 +70,7 @@ def query(
         response = engine.query(query_str)
 
         # Convert to QueryResult
-        sources = _extract_sources(getattr(response, 'source_nodes', []))
+        sources = extract_sources(getattr(response, 'source_nodes', []))
 
         return QueryResult(
             answer=str(response.response) if hasattr(response, 'response') else str(response),
@@ -93,6 +93,7 @@ def federated_query(
     config: RAGConfig | None = None,
     mode: QueryMode = "hybrid",
     source_filter: SourceFilter = None,
+    book_filter: "BookFilter | None" = None,
 ) -> QueryResult:
     """
     Query multiple indexes with weighted merging.
@@ -118,13 +119,13 @@ def federated_query(
     start_time = time.time()
 
     # Retrieve from all sources
-    all_nodes = _federated_retrieve(query_str, indexes, config, source_filter)
+    all_nodes = _federated_retrieve(query_str, indexes, config, source_filter, book_filter)
 
     # Synthesize answer
-    llm = _get_llm(config)
-    answer = _synthesize_answer(query_str, all_nodes, llm)
+    llm = get_llm(config)
+    answer = synthesize_answer(query_str, all_nodes, llm)
 
-    sources = _extract_sources(all_nodes)
+    sources = extract_sources(all_nodes)
 
     return QueryResult(
         answer=answer,
@@ -188,7 +189,7 @@ def research(
 
 def _build_query_engine(index: VectorStoreIndex, config: RAGConfig, mode: str):
     """Build appropriate query engine based on mode."""
-    llm = _get_llm(config)
+    llm = get_llm(config)
 
     if mode == "simple":
         # Simple vector retrieval
@@ -205,7 +206,7 @@ def _build_query_engine(index: VectorStoreIndex, config: RAGConfig, mode: str):
         )
 
 
-def _get_llm(config: RAGConfig):
+def get_llm(config: RAGConfig):
     """Get configured LLM instance."""
     try:
         from tracked_llm import wrap_llm_with_tracking
@@ -228,6 +229,7 @@ def _federated_retrieve(
     indexes: dict[str, IndexSource],
     config: RAGConfig,
     source_filter: SourceFilter = None,
+    book_filter: BookFilter | None = None,
 ) -> list:
     """Retrieve from multiple indexes and merge."""
     all_nodes = []
@@ -237,7 +239,12 @@ def _federated_retrieve(
             continue
 
         try:
-            retriever = source.index.as_retriever(similarity_top_k=config.retrieval.top_k)
+            # Use filtered retriever for books when filter is active
+            if source.source_type.value == "books" and book_filter:
+                from books_retriever import get_books_retriever
+                retriever = get_books_retriever(source.index, config.retrieval.top_k, book_filter)
+            else:
+                retriever = source.index.as_retriever(similarity_top_k=config.retrieval.top_k)
             nodes = retriever.retrieve(query_str)
 
             # Apply source weight
@@ -255,7 +262,7 @@ def _federated_retrieve(
     return all_nodes[:config.retrieval.rerank_top_n]
 
 
-def _synthesize_answer(query_str: str, nodes: list, llm) -> str:
+def synthesize_answer(query_str: str, nodes: list, llm) -> str:
     """Synthesize answer from retrieved nodes."""
     if not nodes:
         return "No relevant information found."
@@ -303,7 +310,7 @@ def _do_research(
             config=config,
         )
 
-        llm = _get_llm(config)
+        llm = get_llm(config)
 
         research_retriever = ResearchRetriever(
             base_retriever=base_retriever,
@@ -317,7 +324,7 @@ def _do_research(
         # Convert to our ResearchResult type
         return ResearchResult(
             answer=result.answer if hasattr(result, 'answer') else str(result),
-            sources=_extract_sources(result.source_nodes if hasattr(result, 'source_nodes') else []),
+            sources=extract_sources(result.source_nodes if hasattr(result, 'source_nodes') else []),
             tokens_used=_get_tokens_used(result),
             exec_time=0,  # Will be set by caller
             query=query_str,
@@ -341,7 +348,7 @@ def _do_research(
         )
 
 
-def _extract_sources(source_nodes) -> list[SourceNode]:
+def extract_sources(source_nodes) -> list[SourceNode]:
     """Convert LlamaIndex source nodes to our SourceNode type."""
     sources = []
     for node in source_nodes:

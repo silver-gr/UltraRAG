@@ -119,7 +119,8 @@ class FederatedRetriever(BaseRetriever):
         reranker=None,
         top_k_per_source: Optional[int] = None,
         final_top_k: Optional[int] = None,
-        parallel: bool = True
+        parallel: bool = True,
+        book_filter=None,
     ):
         """
         Initialize federated retriever.
@@ -132,6 +133,7 @@ class FederatedRetriever(BaseRetriever):
             top_k_per_source: How many results to get from each source (default: config.top_k)
             final_top_k: Final number of results after merge (default: config.top_k)
             parallel: Whether to query sources in parallel
+            book_filter: Optional BookFilter for category/author filtering on books
         """
         self.sources = sources
         self.config = config
@@ -141,6 +143,7 @@ class FederatedRetriever(BaseRetriever):
         # Use rerank_top_n for final limit (now 100+) to allow more sources
         self.final_top_k = final_top_k or config.retrieval.rerank_top_n
         self.parallel = parallel
+        self._book_filter = book_filter
 
         # Build retrievers for each source
         self.retrievers: Dict[str, BaseRetriever] = {}
@@ -151,34 +154,46 @@ class FederatedRetriever(BaseRetriever):
     def _build_retrievers(self):
         """Build retriever for each source."""
         for source in self.sources:
-            # Base vector retriever
-            base_retriever = VectorIndexRetriever(
-                index=source.index,
-                similarity_top_k=self.top_k_per_source
-            )
+            # For books with active filter: use filtered retriever, skip BM25
+            if source.source_type == "books" and self._book_filter:
+                from books_retriever import get_books_retriever
+                base_retriever = get_books_retriever(
+                    source.index, self.top_k_per_source, self._book_filter
+                )
+                retriever = base_retriever
+                # CRITICAL: Skip BM25 fusion when filter active.
+                # BM25Retriever searches ALL source.nodes (no WHERE support),
+                # which leaks out-of-filter results into QueryFusionRetriever.
+                # Vector-only retrieval with LanceDB WHERE is correct here.
+                logger.info("Books filter active — BM25 fusion disabled for books source")
+            else:
+                # Normal path: standard vector retriever
+                base_retriever = VectorIndexRetriever(
+                    index=source.index,
+                    similarity_top_k=self.top_k_per_source
+                )
+                retriever = base_retriever
 
-            retriever = base_retriever
+                # Add BM25 fusion for hybrid search if nodes available
+                if BM25_AVAILABLE and source.nodes and self.config.retrieval.enable_hybrid_search:
+                    try:
+                        from llama_index.core.retrievers import QueryFusionRetriever
 
-            # Add BM25 fusion for hybrid search if nodes available
-            if BM25_AVAILABLE and source.nodes and self.config.retrieval.enable_hybrid_search:
-                try:
-                    from llama_index.core.retrievers import QueryFusionRetriever
+                        bm25_retriever = BM25Retriever.from_defaults(
+                            nodes=source.nodes,
+                            similarity_top_k=self.top_k_per_source
+                        )
 
-                    bm25_retriever = BM25Retriever.from_defaults(
-                        nodes=source.nodes,
-                        similarity_top_k=self.top_k_per_source
-                    )
-
-                    retriever = QueryFusionRetriever(
-                        retrievers=[base_retriever, bm25_retriever],
-                        similarity_top_k=self.top_k_per_source,
-                        num_queries=1,
-                        mode="reciprocal_rerank",
-                        use_async=False
-                    )
-                    logger.info(f"Built hybrid retriever for source: {source.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to build hybrid retriever for {source.name}: {e}")
+                        retriever = QueryFusionRetriever(
+                            retrievers=[base_retriever, bm25_retriever],
+                            similarity_top_k=self.top_k_per_source,
+                            num_queries=1,
+                            mode="reciprocal_rerank",
+                            use_async=False
+                        )
+                        logger.info(f"Built hybrid retriever for source: {source.name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to build hybrid retriever for {source.name}: {e}")
 
             # Add graph enhancement for vault sources
             if source.source_type == "vault" and source.wikilink_graph and self.config.retrieval.enable_graph_retrieval:
@@ -297,7 +312,8 @@ class FederatedQueryEngine:
         query_transformer: Optional[QueryTransformer] = None,
         cache_size: int = 100,
         use_cache: bool = True,
-        source_filter: Optional[List[str]] = None
+        source_filter: Optional[List[str]] = None,
+        book_filter=None,
     ):
         """
         Initialize federated query engine.
@@ -310,6 +326,7 @@ class FederatedQueryEngine:
             cache_size: LRU cache size
             use_cache: Whether to cache queries
             source_filter: Optional list of source names to query (None = all)
+            book_filter: Optional BookFilter for category/author filtering on books
         """
         self.sources = sources
         self.config = config
@@ -318,6 +335,7 @@ class FederatedQueryEngine:
         self.use_cache = use_cache
         self.query_cache = LRUCache(max_size=cache_size) if use_cache else None
         self.source_filter = source_filter
+        self._book_filter = book_filter
 
         # Filter sources if specified
         if source_filter:
@@ -341,7 +359,8 @@ class FederatedQueryEngine:
             sources=self.active_sources,
             config=self.config,
             query_transformer=self.query_transformer,
-            reranker=self.reranker
+            reranker=self.reranker,
+            book_filter=self._book_filter,
         )
 
         # Wrap with self-correction if enabled
