@@ -12,6 +12,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Protocol, Literal, Any
 from datetime import datetime
+import hashlib
 
 
 # === EXCEPTIONS (Agent-friendly with fix hints) ===
@@ -205,6 +206,82 @@ class IndexManager(Protocol):
     def index(self) -> Any: ...
     def load(self) -> Any | None: ...
     def exists(self) -> bool: ...
+
+
+# === BOOK TYPES ===
+
+def _normalize_category(cat: str) -> str:
+    """Normalize a category string for consistent storage and lookup.
+
+    Used in storage (calibre_metadata), CLI parsing, and UI selection
+    to prevent filter/storage mismatches.
+    """
+    return " ".join(cat.strip().lower().split())
+
+
+@dataclass
+class BookMetadata:
+    """Metadata for a book, enriched from Calibre and/or web sources."""
+    title: str
+    file_path: str
+    file_type: str  # "epub" or "pdf"
+    file_size: int
+    # Enrichment fields (all optional for backward compat)
+    author: str = ""
+    categories: list[str] = field(default_factory=list)
+    description: str = ""
+    language: str = ""
+    publisher: str = ""
+    isbn: str = ""
+    calibre_id: int | None = None
+    match_confidence: float = 0.0
+    metadata_source: str = "filename"  # "calibre", "web", "calibre+web", "filename"
+
+    @property
+    def book_uid(self) -> str:
+        """Stable unique identifier for this book."""
+        if self.calibre_id is not None:
+            return f"calibre:{self.calibre_id}"
+        return f"hash:{hashlib.sha256(f'{self.file_path}:{self.file_size}'.encode()).hexdigest()[:16]}"
+
+
+@dataclass
+class BookFilter:
+    """Filter for book queries using native LanceDB WHERE clauses.
+
+    Semantics: OR within same field, AND across different fields.
+    Example: categories=["productivity", "habits"] AND authors=["Cal Newport"]
+    matches books in EITHER category by Cal Newport.
+    """
+    categories: list[str] | None = None
+    authors: list[str] | None = None
+    book_uids: list[str] | None = None
+    language: str | None = None
+
+    @staticmethod
+    def _esc(val: str) -> str:
+        """Escape single quotes for SQL safety (O'Reilly -> O''Reilly)."""
+        return val.replace("'", "''")
+
+    def to_lance_where(self) -> str | None:
+        """Build native LanceDB WHERE clause using DataFusion SQL syntax.
+
+        Returns None if no filters are set.
+        """
+        clauses = []
+        if self.categories:
+            normed = [_normalize_category(c) for c in self.categories]
+            vals = ", ".join(f"'{self._esc(c)}'" for c in normed)
+            clauses.append(f"array_has_any(metadata.book_categories, make_array({vals}))")
+        if self.authors:
+            vals = ", ".join(f"'{self._esc(a)}'" for a in self.authors)
+            clauses.append(f"metadata.book_author IN ({vals})")
+        if self.book_uids:
+            vals = ", ".join(f"'{self._esc(u)}'" for u in self.book_uids)
+            clauses.append(f"metadata.book_uid IN ({vals})")
+        if self.language:
+            clauses.append(f"metadata.book_language = '{self._esc(self.language)}'")
+        return " AND ".join(clauses) if clauses else None
 
 
 # === TYPE ALIASES ===
