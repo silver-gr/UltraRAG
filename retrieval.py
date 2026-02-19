@@ -231,15 +231,21 @@ def _federated_retrieve(
     source_filter: SourceFilter = None,
     book_filter: BookFilter | None = None,
 ) -> list:
-    """Retrieve from multiple indexes and merge."""
-    all_nodes = []
+    """Retrieve from multiple indexes and merge with guaranteed source diversity.
+
+    Uses reserved-slot strategy: each source gets a minimum number of slots
+    proportional to its presence, ensuring non-primary sources aren't squeezed
+    out by score dominance from a single source.
+    """
+    per_source_nodes: dict[str, list] = {}
+    active_sources = []
 
     for name, source in indexes.items():
         if source_filter and source_filter != "all" and source.source_type.value != source_filter:
             continue
 
+        active_sources.append(name)
         try:
-            # Use filtered retriever for books when filter is active
             if source.source_type.value == "books" and book_filter:
                 from books_retriever import get_books_retriever
                 retriever = get_books_retriever(source.index, config.retrieval.top_k, book_filter)
@@ -247,19 +253,72 @@ def _federated_retrieve(
                 retriever = source.index.as_retriever(similarity_top_k=config.retrieval.top_k)
             nodes = retriever.retrieve(query_str)
 
-            # Apply source weight
+            # Tag each node with its source name for tracking
             for node in nodes:
                 if hasattr(node, 'score') and node.score is not None:
                     node.score *= source.weight
+                if hasattr(node, 'node') and hasattr(node.node, 'metadata'):
+                    node.node.metadata['_federation_source'] = name
 
-            all_nodes.extend(nodes)
+            per_source_nodes[name] = sorted(
+                nodes, key=lambda n: getattr(n, 'score', 0) or 0, reverse=True
+            )
         except Exception as e:
             logger.warning(f"Failed to retrieve from {name}: {e}")
 
-    # Sort by score descending
+    total_limit = config.retrieval.rerank_top_n
+    num_sources = len(per_source_nodes)
+
+    # Single source or no results — no diversity needed
+    if num_sources <= 1:
+        all_nodes = []
+        for nodes in per_source_nodes.values():
+            all_nodes.extend(nodes)
+        all_nodes.sort(key=lambda n: getattr(n, 'score', 0) or 0, reverse=True)
+        return all_nodes[:total_limit]
+
+    # Multi-source: reserve minimum slots per non-primary source
+    # Primary source (highest weight) gets remaining slots after reservations
+    # Reserve 15% of total per non-primary source (min 10, max 50)
+    reserve_per_source = max(10, min(50, int(total_limit * 0.15)))
+
+    # Phase 1: Fill reserved slots for each source (top-N from each)
+    reserved: dict[str, list] = {}
+    used_ids: set = set()
+    for name, nodes in per_source_nodes.items():
+        reserved[name] = []
+        for node in nodes[:reserve_per_source]:
+            node_id = id(node)
+            if node_id not in used_ids:
+                reserved[name].append(node)
+                used_ids.add(node_id)
+
+    # Phase 2: Fill remaining slots by global score ranking
+    remaining_slots = total_limit - sum(len(v) for v in reserved.values())
+    overflow = []
+    for name, nodes in per_source_nodes.items():
+        for node in nodes:
+            if id(node) not in used_ids:
+                overflow.append(node)
+    overflow.sort(key=lambda n: getattr(n, 'score', 0) or 0, reverse=True)
+
+    # Combine: reserved slots + best remaining
+    all_nodes = []
+    for nodes in reserved.values():
+        all_nodes.extend(nodes)
+    all_nodes.extend(overflow[:max(0, remaining_slots)])
+
+    # Final sort by score
     all_nodes.sort(key=lambda n: getattr(n, 'score', 0) or 0, reverse=True)
 
-    return all_nodes[:config.retrieval.rerank_top_n]
+    if num_sources > 1:
+        source_counts = {}
+        for n in all_nodes:
+            src = n.node.metadata.get('_federation_source', '?') if hasattr(n, 'node') else '?'
+            source_counts[src] = source_counts.get(src, 0) + 1
+        logger.info(f"Federated retrieve: {len(all_nodes)} nodes from {source_counts}")
+
+    return all_nodes[:total_limit]
 
 
 def synthesize_answer(query_str: str, nodes: list, llm) -> str:
