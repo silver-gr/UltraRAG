@@ -169,6 +169,88 @@ class TestBookLoader:
             assert docs[0].metadata["book_title"] == "My Great Book"
 
 
+class TestBookLoaderEnrichment:
+    """Tests for BookLoader enrichment metadata fields."""
+
+    @pytest.mark.unit
+    def test_load_book_has_book_uid(self, tmp_path):
+        """book_uid should always be present in metadata."""
+        from book_loader import BookLoader
+
+        mock_doc = Document(
+            text="Content",
+            metadata={"title": "Test Book"}
+        )
+
+        with patch('book_loader.SimpleDirectoryReader') as MockReader:
+            MockReader.return_value.load_data.return_value = [mock_doc]
+
+            loader = BookLoader(tmp_path)
+            book_path = tmp_path / "test.epub"
+            book_path.write_bytes(b"x" * 100)
+
+            docs = loader.load_book(book_path)
+
+            assert "book_uid" in docs[0].metadata
+            assert docs[0].metadata["book_uid"].startswith("hash:")
+
+    @pytest.mark.unit
+    def test_load_book_has_book_categories_list(self, tmp_path):
+        """book_categories should be a list (even if empty)."""
+        from book_loader import BookLoader
+
+        mock_doc = Document(text="Content", metadata={})
+
+        with patch('book_loader.SimpleDirectoryReader') as MockReader:
+            MockReader.return_value.load_data.return_value = [mock_doc]
+
+            loader = BookLoader(tmp_path)
+            book_path = tmp_path / "test.epub"
+            book_path.write_bytes(b"x" * 100)
+
+            docs = loader.load_book(book_path)
+
+            assert isinstance(docs[0].metadata["book_categories"], list)
+
+    @pytest.mark.unit
+    def test_load_book_with_enrichment_cache(self, tmp_path):
+        """When cache has data, metadata should be enriched."""
+        from book_loader import BookLoader
+        from calibre_metadata import BookMetadataCache
+        from models import BookMetadata
+
+        mock_doc = Document(text="Content", metadata={})
+
+        cache = BookMetadataCache(tmp_path / "cache.json")
+        book_path = tmp_path / "Cal Newport - Deep Work.epub"
+        book_path.write_bytes(b"x" * 100)
+
+        meta = BookMetadata(
+            title="Deep Work",
+            file_path=str(book_path),
+            file_type="epub",
+            file_size=100,
+            author="Cal Newport",
+            categories=["productivity", "focus"],
+            calibre_id=42,
+            match_confidence=0.92,
+            metadata_source="calibre",
+        )
+        cache.put(meta)
+
+        with patch('book_loader.SimpleDirectoryReader') as MockReader:
+            MockReader.return_value.load_data.return_value = [mock_doc]
+
+            loader = BookLoader(tmp_path)
+            loader.set_enrichment_cache(cache)
+            docs = loader.load_book(book_path)
+
+            assert docs[0].metadata["book_author"] == "Cal Newport"
+            assert docs[0].metadata["book_uid"] == "calibre:42"
+            assert docs[0].metadata["book_categories"] == ["productivity", "focus"]
+            assert docs[0].metadata["metadata_source"] == "calibre"
+
+
 class TestBookChunker:
     """
     Tests for BookChunker class.

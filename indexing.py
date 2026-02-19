@@ -8,6 +8,7 @@ PUBLIC API:
 - index_vault(config) -> VectorStoreIndex
 - index_conversations(config) -> VectorStoreIndex
 - index_books(config) -> VectorStoreIndex
+- enrich_books(config) -> dict
 - load_index(config, source) -> VectorStoreIndex | None
 - index_exists(config, source) -> bool
 """
@@ -161,6 +162,15 @@ def index_books(config: RAGConfig) -> VectorStoreIndex | None:
     from vector_store import get_vector_store, create_vector_index
 
     loader = BookLoader(Path(books_path))
+
+    # Load enrichment cache if it exists
+    cache_path = config.books.metadata_cache_path
+    if cache_path and Path(cache_path).exists():
+        from calibre_metadata import BookMetadataCache
+        cache = BookMetadataCache(Path(cache_path))
+        loader.set_enrichment_cache(cache)
+        logger.info("Loaded book metadata cache | entries=%d", len(cache))
+
     documents = loader.load_all_books(show_progress=True)
 
     if not documents:
@@ -188,6 +198,133 @@ def index_books(config: RAGConfig) -> VectorStoreIndex | None:
     logger.info("Books indexed | count=%d", len(nodes))
 
     return index
+
+
+def enrich_books(config: RAGConfig) -> dict:
+    """
+    Run metadata enrichment pipeline: Calibre extract -> web enrich -> save cache.
+
+    This is an explicit pre-step before indexing. Run 'enrich' first, then 'index'.
+
+    Args:
+        config: RAG configuration with books settings
+
+    Returns:
+        Dict with enrichment statistics
+
+    Example:
+        >>> stats = enrich_books(config)
+        >>> print(f"Matched: {stats['calibre_matched']}, Web: {stats['web_enriched']}")
+    """
+    books_path = config.books.path
+    if not books_path or not Path(books_path).exists():
+        raise ConfigurationError("BOOKS_PATH", "/path/to/books")
+
+    from book_loader import BookLoader
+    from calibre_metadata import CalibreMetadataExtractor, BookMetadataCache
+
+    loader = BookLoader(Path(books_path))
+    book_files = loader.discover_books()
+
+    if not book_files:
+        logger.warning("No books found for enrichment")
+        return {"total": 0}
+
+    cache = BookMetadataCache(Path(config.books.metadata_cache_path))
+
+    stats = {
+        "total": len(book_files),
+        "calibre_matched": 0,
+        "web_enriched": 0,
+        "no_match": 0,
+        "already_cached": 0,
+        "excluded_tags": 0,
+        "avg_confidence": 0.0,
+    }
+
+    # Phase 1: Calibre extraction
+    calibre_extractor = None
+    if config.books.calibre_db_path and Path(config.books.calibre_db_path).exists():
+        calibre_extractor = CalibreMetadataExtractor(
+            db_path=Path(config.books.calibre_db_path),
+            match_threshold=config.books.calibre_match_threshold,
+            exclude_tags=frozenset(config.books.exclude_tags),
+        )
+        logger.info("Calibre DB loaded: %s", config.books.calibre_db_path)
+    else:
+        logger.warning("No Calibre DB configured — using filename metadata only")
+
+    needs_web = []
+    confidences = []
+
+    for book_path in book_files:
+        # Skip if already cached
+        if book_path in cache:
+            stats["already_cached"] += 1
+            continue
+
+        meta = None
+        if calibre_extractor:
+            meta = calibre_extractor.match_book(book_path)
+
+        if meta:
+            stats["calibre_matched"] += 1
+            confidences.append(meta.match_confidence)
+            cache.put(meta)
+            if not meta.categories or not meta.description:
+                needs_web.append(meta)
+        else:
+            # Filename-only metadata
+            from models import BookMetadata
+            file_type = book_path.suffix.lower().lstrip(".")
+            file_size = book_path.stat().st_size if book_path.exists() else 0
+            meta = BookMetadata(
+                title=book_path.stem,
+                file_path=str(book_path),
+                file_type=file_type,
+                file_size=file_size,
+                metadata_source="filename",
+            )
+            cache.put(meta)
+            needs_web.append(meta)
+            stats["no_match"] += 1
+
+    # Phase 2: Web enrichment (optional)
+    if config.books.web_enrich_enabled and needs_web:
+        try:
+            from web_metadata_enricher import WebMetadataEnricher
+            enricher = WebMetadataEnricher(max_per_run=config.books.web_enrich_max_per_run)
+            if enricher.available:
+                _, web_count = enricher.enrich_batch(needs_web)
+                stats["web_enriched"] = web_count
+                # Re-cache the web-enriched entries
+                for meta in needs_web:
+                    cache.put(meta)
+        except Exception as e:
+            logger.warning("Web enrichment failed: %s", e)
+
+    # Save cache
+    cache.save()
+
+    if confidences:
+        stats["avg_confidence"] = round(sum(confidences) / len(confidences), 4)
+
+    # Check if RAPTOR index might be stale
+    raptor_path = Path("data/raptor/books_summary")
+    if raptor_path.exists():
+        logger.warning(
+            "RAPTOR books_summary index exists — may be stale after enrichment. "
+            "Rebuild with 'raptor-books' command."
+        )
+
+    logger.info(
+        "Enrichment complete: %d matched (avg confidence %.2f), "
+        "%d web-enriched, %d no match, %d already cached",
+        stats["calibre_matched"], stats["avg_confidence"],
+        stats["web_enriched"], stats["no_match"], stats["already_cached"],
+    )
+
+    return stats
 
 
 def load_index(

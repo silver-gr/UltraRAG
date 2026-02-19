@@ -1,22 +1,15 @@
 """Book document loader for EPUB and PDF files."""
+import hashlib
 import logging
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from dataclasses import dataclass
 from llama_index.core import Document, SimpleDirectoryReader
 from llama_index.core.schema import TextNode
 from tqdm import tqdm
 
+from models import BookMetadata
+
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class BookMetadata:
-    """Metadata for a book."""
-    title: str
-    file_path: str
-    file_type: str  # "epub" or "pdf"
-    file_size: int
 
 
 class BookLoader:
@@ -31,6 +24,11 @@ class BookLoader:
             books_path: Path to books directory
         """
         self.books_path = books_path
+        self._cache = None
+
+    def set_enrichment_cache(self, cache):
+        """Set optional enrichment cache for metadata lookup during loading."""
+        self._cache = cache
 
     def discover_books(self) -> List[Path]:
         """Discover all supported book files in the directory.
@@ -69,10 +67,22 @@ class BookLoader:
             file_type = book_path.suffix.lower().lstrip(".")
             title = self._extract_title(book_path, documents)
 
+            # Lookup enriched metadata if cache available
+            enriched = self._cache.lookup(book_path) if self._cache else None
+
+            # Compute hash-based uid fallback
+            hash_uid = f"hash:{hashlib.sha256(f'{str(book_path)}:{book_path.stat().st_size}'.encode()).hexdigest()[:16]}"
+
             for doc in documents:
                 doc.metadata.update({
                     "source_type": "books",
-                    "book_title": title,
+                    "book_title": enriched.title if enriched else title,
+                    "book_author": enriched.author if enriched else "",
+                    "book_uid": enriched.book_uid if enriched else hash_uid,
+                    "book_categories": enriched.categories if enriched else [],
+                    "book_language": enriched.language if enriched else "",
+                    "book_description": (enriched.description[:500]) if enriched and enriched.description else "",
+                    "metadata_source": enriched.metadata_source if enriched else "filename",
                     "file_path": str(book_path),
                     "file_type": file_type,
                     "file_name": book_path.name,

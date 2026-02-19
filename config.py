@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field, SecretStr, field_validator
 
 load_dotenv()
 
+DEFAULT_BOOKS_EXCLUDE_TAGS = ["audio", "notbooks", "have read", "oldstuff", "reading", "quick", "su"]
+
 
 class EmbeddingConfig(BaseModel):
     """Embedding model configuration."""
@@ -254,6 +256,12 @@ class BooksConfig(BaseModel):
     weight: float = Field(default=0.9)  # Score weight vs vault (vault=1.0)
     include_in_default_search: bool = Field(default=True)
     table_name: str = Field(default="books")
+    calibre_db_path: Optional[Path] = Field(default=None)
+    calibre_match_threshold: float = Field(default=0.75)
+    exclude_tags: list[str] = Field(default_factory=lambda: list(DEFAULT_BOOKS_EXCLUDE_TAGS))
+    web_enrich_enabled: bool = Field(default=False)
+    web_enrich_max_per_run: int = Field(default=50)
+    metadata_cache_path: Path = Field(default=Path("data/book_metadata_cache.json"))
 
     @field_validator('weight')
     @classmethod
@@ -478,7 +486,13 @@ def load_config() -> RAGConfig:
             path=Path(os.getenv("BOOKS_PATH", "")) if os.getenv("BOOKS_PATH") else None,
             weight=float(os.getenv("BOOKS_WEIGHT", "0.9")),
             include_in_default_search=os.getenv("BOOKS_IN_DEFAULT_SEARCH", "true").lower() == "true",
-            table_name=os.getenv("BOOKS_TABLE_NAME", "books")
+            table_name=os.getenv("BOOKS_TABLE_NAME", "books"),
+            calibre_db_path=Path(os.getenv("CALIBRE_DB_PATH", "")) if os.getenv("CALIBRE_DB_PATH") else None,
+            calibre_match_threshold=float(os.getenv("CALIBRE_MATCH_THRESHOLD", "0.75")),
+            exclude_tags=[t.strip() for t in os.getenv("BOOKS_EXCLUDE_TAGS", "audio,notbooks,have read,oldstuff,reading,quick,su").split(",")],
+            web_enrich_enabled=os.getenv("BOOKS_WEB_ENRICH", "false").lower() == "true",
+            web_enrich_max_per_run=int(os.getenv("BOOKS_WEB_ENRICH_MAX", "50")),
+            metadata_cache_path=Path(os.getenv("BOOKS_METADATA_CACHE_PATH", "data/book_metadata_cache.json")),
         ),
         raptor=RaptorConfig(
             enabled=os.getenv("ENABLE_RAPTOR", "false").lower() == "true",
