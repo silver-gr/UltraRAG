@@ -13,6 +13,7 @@ from pathlib import Path
 from datetime import datetime
 from main import UltraRAG
 from config import load_config
+from models import BookFilter, _normalize_category
 from vector_store import index_exists, delete_from_index
 from temporal_filter import get_all_presets, DateFilterPreset
 from settings_store import get_exclusions, add_exclusion, remove_exclusion
@@ -1829,6 +1830,52 @@ def main():
                 label_visibility="collapsed"
             )
 
+        # Book category/author filters (only show when books are loaded)
+        book_filter = None
+        has_books = (
+            st.session_state.rag
+            and getattr(st.session_state.rag, 'books_index', None) is not None
+        )
+        if has_books:
+            categories = st.session_state.rag.get_book_categories()
+            if categories:
+                with st.expander("Book Filters", expanded=False):
+                    cat_options = [f"{c['name']} ({c['count']})" for c in categories]
+                    selected_cats = st.multiselect(
+                        "Categories",
+                        options=cat_options,
+                        key="book_cat_filter",
+                        help="Filter books by category (OR within selection)",
+                    )
+                    # Extract category names from "name (count)" display format
+                    selected_cat_names = [
+                        _normalize_category(c.rsplit(" (", 1)[0])
+                        for c in selected_cats
+                    ] if selected_cats else None
+
+                    # Author filter
+                    author_input = st.text_input(
+                        "Author filter",
+                        placeholder="e.g. Cal Newport, James Clear",
+                        key="book_author_filter",
+                        help="Comma-separated author names",
+                    )
+                    selected_authors = (
+                        [a.strip() for a in author_input.split(",") if a.strip()]
+                        if author_input else None
+                    )
+
+                    if selected_cat_names or selected_authors:
+                        book_filter = BookFilter(
+                            categories=selected_cat_names,
+                            authors=selected_authors,
+                        )
+                        st.info(f"Filters active: {book_filter.to_lance_where()}")
+                        if st.button("Clear filters"):
+                            st.session_state["book_cat_filter"] = []
+                            st.session_state["book_author_filter"] = ""
+                            st.rerun()
+
         # Display pending result (from rerun after save)
         if st.session_state.pending_result and not search_button:
             pending = st.session_state.pending_result
@@ -2016,7 +2063,7 @@ def main():
                             elif search_scope == "💬 Conversations":
                                 result = st.session_state.rag.query_conversations_only(query, max_sources=None, date_filter=date_filter)
                             else:  # Both
-                                result = st.session_state.rag.query_federated(query, max_sources=None, date_filter=date_filter)
+                                result = st.session_state.rag.query_federated(query, max_sources=None, date_filter=date_filter, book_filter=book_filter)
 
                             # Calculate execution time and stats
                             exec_time = time.time() - start_time
