@@ -159,7 +159,7 @@ def get_cached_rag(_cache_key: int):
             return None, False
 
         config = load_config()
-        if not index_exists(config.vector_db):
+        if not index_exists(config.vector_db, table_name=config.vector_db.vault_table):
             return None, False
 
         # Initialize and load
@@ -1527,7 +1527,7 @@ def main():
         # Check for existing index
         try:
             config = load_config()
-            has_existing_index = index_exists(config.vector_db)
+            has_existing_index = index_exists(config.vector_db, table_name=config.vector_db.vault_table)
         except Exception:
             has_existing_index = False
 

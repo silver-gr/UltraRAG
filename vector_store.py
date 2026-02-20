@@ -19,16 +19,19 @@ CACHE_DIR = Path("data/cache")
 NODES_CACHE_FILE = CACHE_DIR / "docstore_nodes.pkl"
 
 
-def _get_index_hash(config: VectorDBConfig) -> str:
+def _get_index_hash(config: VectorDBConfig, table_name: str = "obsidian_embeddings") -> str:
     """Get hash of index to detect changes."""
     import lancedb
     db = lancedb.connect(str(config.lancedb_path))
-    table = db.open_table("obsidian_embeddings")
+    table = db.open_table(table_name)
     count = table.count_rows()
-    return hashlib.md5(f"{count}".encode()).hexdigest()[:8]
+    return hashlib.md5(f"{table_name}:{count}".encode()).hexdigest()[:8]
 
 
-def _load_cached_nodes(config: VectorDBConfig) -> list[TextNode] | None:
+def _load_cached_nodes(
+    config: VectorDBConfig,
+    table_name: str = "obsidian_embeddings"
+) -> list[TextNode] | None:
     """Load nodes from disk cache if valid.
 
     Note: Cache stores node metadata only (not embeddings) for speed.
@@ -42,8 +45,8 @@ def _load_cached_nodes(config: VectorDBConfig) -> list[TextNode] | None:
             cached = pickle.load(f)
 
         # Validate cache by comparing row count hash
-        current_hash = _get_index_hash(config)
-        if cached.get('hash') != current_hash:
+        current_hash = _get_index_hash(config, table_name=table_name)
+        if cached.get('hash') != current_hash or cached.get('table_name') != table_name:
             logger.info(f"Cache invalid (hash: {cached.get('hash')} vs {current_hash})")
             return None
 
@@ -60,11 +63,15 @@ def _load_cached_nodes(config: VectorDBConfig) -> list[TextNode] | None:
         return None
 
 
-def _save_nodes_to_cache(nodes: list[TextNode], config: VectorDBConfig) -> None:
+def _save_nodes_to_cache(
+    nodes: list[TextNode],
+    config: VectorDBConfig,
+    table_name: str = "obsidian_embeddings"
+) -> None:
     """Save nodes to disk cache (metadata only, no embeddings for speed)."""
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        current_hash = _get_index_hash(config)
+        current_hash = _get_index_hash(config, table_name=table_name)
 
         # Store only essential data (no embeddings - they're huge)
         node_data_list = [
@@ -73,7 +80,10 @@ def _save_nodes_to_cache(nodes: list[TextNode], config: VectorDBConfig) -> None:
         ]
 
         with open(NODES_CACHE_FILE, 'wb') as f:
-            pickle.dump({'hash': current_hash, 'nodes': node_data_list}, f)
+            pickle.dump(
+                {'table_name': table_name, 'hash': current_hash, 'nodes': node_data_list},
+                f
+            )
 
         logger.info(f"Saved {len(nodes)} nodes to disk cache")
     except Exception as e:
@@ -335,14 +345,14 @@ def load_vector_index(
         # LlamaIndex's from_vector_store() creates an empty in-memory docstore
         if config and config.db_type.lower() == "lancedb":
             # Try disk cache first (survives app restarts)
-            nodes = _load_cached_nodes(config)
+            nodes = _load_cached_nodes(config, table_name=table_name)
 
             if nodes is None:
                 # Cache miss - reconstruct from LanceDB
                 logger.info("Reconstructing docstore from LanceDB metadata...")
                 nodes = reconstruct_nodes_from_lancedb(config, table_name=table_name)
                 if nodes:
-                    _save_nodes_to_cache(nodes, config)
+                    _save_nodes_to_cache(nodes, config, table_name=table_name)
 
             if nodes:
                 for node in nodes:
