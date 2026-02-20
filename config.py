@@ -65,7 +65,7 @@ class VectorDBConfig(BaseModel):
     lancedb_path: Path = Field(default=Path("./data/lancedb"))
     # Separate table for AI conversation index (federated retrieval)
     conversations_table: str = Field(default="conversations")
-    vault_table: str = Field(default="vectors")  # Default table name for vault
+    vault_table: str = Field(default="obsidian_embeddings")
     qdrant_host: str = Field(default="localhost")
     qdrant_port: int = Field(default=6333)
     qdrant_collection: str = Field(default="obsidian_notes")
@@ -262,6 +262,12 @@ class BooksConfig(BaseModel):
     web_enrich_enabled: bool = Field(default=False)
     web_enrich_max_per_run: int = Field(default=50)
     metadata_cache_path: Path = Field(default=Path("data/book_metadata_cache.json"))
+    # Book-specific chunking controls
+    book_chunk_size: int = Field(default=1024)
+    book_chunk_overlap: int = Field(default=128)
+    book_min_chunk_size: int = Field(default=100)
+    book_respect_chapters: bool = Field(default=True)
+    book_respect_paragraphs: bool = Field(default=True)
 
     @field_validator('weight')
     @classmethod
@@ -269,6 +275,17 @@ class BooksConfig(BaseModel):
         """Validate weight is between 0 and 2."""
         if not 0 <= v <= 2:
             raise ValueError(f"weight must be between 0 and 2, got {v}")
+        return v
+
+    @field_validator('book_chunk_overlap')
+    @classmethod
+    def validate_book_chunk_overlap(cls, v: int, info: Any) -> int:
+        """Validate that book_chunk_overlap is less than book_chunk_size."""
+        chunk_size = info.data.get('book_chunk_size')
+        if chunk_size and v >= chunk_size:
+            raise ValueError(
+                f"book_chunk_overlap ({v}) must be less than book_chunk_size ({chunk_size})."
+            )
         return v
 
 
@@ -422,6 +439,8 @@ def load_config() -> RAGConfig:
         vector_db=VectorDBConfig(
             db_type=os.getenv("VECTOR_DB", "lancedb"),
             lancedb_path=Path(os.getenv("LANCEDB_PATH", "./data/lancedb")),
+            conversations_table=os.getenv("CONVERSATIONS_TABLE", "conversations"),
+            vault_table=os.getenv("VAULT_TABLE", "obsidian_embeddings"),
             qdrant_host=os.getenv("QDRANT_HOST", "localhost"),
             qdrant_port=int(os.getenv("QDRANT_PORT", "6333")),
             qdrant_collection=os.getenv("QDRANT_COLLECTION", "obsidian_notes")
@@ -493,6 +512,11 @@ def load_config() -> RAGConfig:
             web_enrich_enabled=os.getenv("BOOKS_WEB_ENRICH", "false").lower() == "true",
             web_enrich_max_per_run=int(os.getenv("BOOKS_WEB_ENRICH_MAX", "50")),
             metadata_cache_path=Path(os.getenv("BOOKS_METADATA_CACHE_PATH", "data/book_metadata_cache.json")),
+            book_chunk_size=int(os.getenv("BOOK_CHUNK_SIZE", "1024")),
+            book_chunk_overlap=int(os.getenv("BOOK_CHUNK_OVERLAP", "128")),
+            book_min_chunk_size=int(os.getenv("BOOK_MIN_CHUNK_SIZE", "100")),
+            book_respect_chapters=os.getenv("BOOK_RESPECT_CHAPTERS", "true").lower() == "true",
+            book_respect_paragraphs=os.getenv("BOOK_RESPECT_PARAGRAPHS", "true").lower() == "true",
         ),
         raptor=RaptorConfig(
             enabled=os.getenv("ENABLE_RAPTOR", "false").lower() == "true",

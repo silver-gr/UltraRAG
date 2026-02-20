@@ -82,7 +82,11 @@ def index_vault(config: RAGConfig) -> VectorStoreIndex | None:
     # Create index
     from vector_store import get_vector_store, create_vector_index
 
-    vector_store = get_vector_store(config.vector_db, mode="overwrite", table_name="obsidian_embeddings")
+    vector_store = get_vector_store(
+        config.vector_db,
+        mode="overwrite",
+        table_name=config.vector_db.vault_table
+    )
     index = create_vector_index(nodes, vector_store, embed_model)
 
     # Store wikilink graph in index metadata for graph retrieval
@@ -129,7 +133,11 @@ def index_conversations(config: RAGConfig) -> VectorStoreIndex | None:
     nodes = chunker.chunk_conversations(documents)
 
     # Create index in separate table
-    vector_store = get_vector_store(config.vector_db, mode="overwrite", table_name="conversations")
+    vector_store = get_vector_store(
+        config.vector_db,
+        mode="overwrite",
+        table_name=config.vector_db.conversations_table
+    )
     index = create_vector_index(nodes, vector_store, embed_model)
 
     logger.info("Conversations indexed | count=%d", len(nodes))
@@ -181,18 +189,22 @@ def index_books(config: RAGConfig) -> VectorStoreIndex | None:
 
     embed_model = get_embedding_model(config.embedding)
     chunk_config = BookChunkConfig(
-        chunk_size=1024,
-        chunk_overlap=128,
-        min_chunk_size=100,
-        respect_chapters=True,
-        respect_paragraphs=True
+        chunk_size=config.books.book_chunk_size,
+        chunk_overlap=config.books.book_chunk_overlap,
+        min_chunk_size=config.books.book_min_chunk_size,
+        respect_chapters=config.books.book_respect_chapters,
+        respect_paragraphs=config.books.book_respect_paragraphs,
     )
     chunker = BookChunker(config=chunk_config)
     nodes = chunker.chunk_documents(documents)
 
     logger.info("Chunked into nodes | count=%d", len(nodes))
 
-    vector_store = get_vector_store(config.vector_db, mode="overwrite", table_name="books")
+    vector_store = get_vector_store(
+        config.vector_db,
+        mode="overwrite",
+        table_name=config.books.table_name
+    )
     index = create_vector_index(nodes, vector_store, embed_model)
 
     logger.info("Books indexed | count=%d", len(nodes))
@@ -258,8 +270,34 @@ def enrich_books(config: RAGConfig) -> dict:
     confidences = []
 
     for book_path in book_files:
-        # Skip if already cached
-        if book_path in cache:
+        # Reuse cache when possible, but allow incremental upgrades:
+        # - retry Calibre matching for cached filename/web-only entries
+        # - allow web enrichment for cached entries missing categories/description
+        cached_meta = cache.lookup(book_path)
+        if cached_meta is not None:
+            # Try upgrading cached non-Calibre entries if Calibre is now available
+            if calibre_extractor and cached_meta.calibre_id is None:
+                upgraded = calibre_extractor.match_book(book_path)
+                if upgraded:
+                    # Preserve cached fields if Calibre doesn't provide them
+                    if not upgraded.categories and cached_meta.categories:
+                        upgraded.categories = cached_meta.categories
+                    if not upgraded.description and cached_meta.description:
+                        upgraded.description = cached_meta.description
+                    if cached_meta.metadata_source in {"web", "calibre+web"}:
+                        upgraded.metadata_source = "calibre+web"
+                    cache.put(upgraded)
+                    cached_meta = upgraded
+                    stats["calibre_matched"] += 1
+                    confidences.append(upgraded.match_confidence)
+
+            # Cached but incomplete entries can still go through web enrichment
+            if config.books.web_enrich_enabled and (
+                not cached_meta.categories or not cached_meta.description
+            ):
+                needs_web.append(cached_meta)
+                continue
+
             stats["already_cached"] += 1
             continue
 
@@ -347,12 +385,12 @@ def load_index(
         ...     index = index_vault(config)
     """
     table_names = {
-        "vault": "obsidian_embeddings",
-        "conversations": "conversations",
-        "books": "books",
+        "vault": config.vector_db.vault_table,
+        "conversations": config.vector_db.conversations_table,
+        "books": config.books.table_name,
     }
 
-    table_name = table_names.get(source, "obsidian_embeddings")
+    table_name = table_names.get(source, config.vector_db.vault_table)
 
     if not index_exists(config, source):
         logger.debug("Index not found | source=%s", source)
@@ -388,12 +426,12 @@ def index_exists(
     from vector_store import index_exists as vs_index_exists
 
     table_names = {
-        "vault": "obsidian_embeddings",
-        "conversations": "conversations",
-        "books": "books",
+        "vault": config.vector_db.vault_table,
+        "conversations": config.vector_db.conversations_table,
+        "books": config.books.table_name,
     }
 
-    table_name = table_names.get(source, "obsidian_embeddings")
+    table_name = table_names.get(source, config.vector_db.vault_table)
 
     return vs_index_exists(config.vector_db, table_name=table_name)
 

@@ -258,14 +258,18 @@ class UltraRAG:
         try:
             # Auto-detect mode if not specified
             if mode is None:
-                if index_exists(self.config.vector_db):
+                if index_exists(self.config.vector_db, table_name=self.config.vector_db.vault_table):
                     mode = "append"
                     logger.info("Existing index found, using append mode")
                 else:
                     mode = "create"
                     logger.info("No existing index found, using create mode")
 
-            self.vector_store = get_vector_store(self.config.vector_db, mode=mode)
+            self.vector_store = get_vector_store(
+                self.config.vector_db,
+                mode=mode,
+                table_name=self.config.vector_db.vault_table
+            )
             logger.debug("Vector store setup completed")
         except Exception as e:
             logger.error(f"Failed to setup vector store: {e}", exc_info=True)
@@ -404,7 +408,7 @@ class UltraRAG:
         Returns:
             True if index was loaded successfully, False otherwise
         """
-        if not index_exists(self.config.vector_db):
+        if not index_exists(self.config.vector_db, table_name=self.config.vector_db.vault_table):
             return False
 
         try:
@@ -414,7 +418,8 @@ class UltraRAG:
             self.index = load_vector_index(
                 vector_store=self.vector_store,
                 embed_model=self.embed_model,
-                config=self.config.vector_db
+                config=self.config.vector_db,
+                table_name=self.config.vector_db.vault_table
             )
 
             print("Index loaded successfully!")
@@ -491,7 +496,7 @@ class UltraRAG:
             batch_size = self.config.embedding.batch_size
 
         # Check if index already exists
-        if not force_reindex and index_exists(self.config.vector_db):
+        if not force_reindex and index_exists(self.config.vector_db, table_name=self.config.vector_db.vault_table):
             print("\nAn existing index was found.")
             print("Options:")
             print("  1. Load existing index (fast)")
@@ -807,7 +812,8 @@ class UltraRAG:
         db = lancedb.connect(str(db_path))
 
         # Check if table exists
-        existing_tables = db.table_names()
+        tables_resp = db.list_tables()
+        existing_tables = tables_resp.tables if hasattr(tables_resp, "tables") else tables_resp
         table_exists = table_name in existing_tables
 
         if mode == "overwrite" and table_exists:
@@ -836,7 +842,9 @@ class UltraRAG:
                 return False
 
             db = lancedb.connect(str(db_path))
-            return table_name in db.table_names()
+            tables_resp = db.list_tables()
+            existing_tables = tables_resp.tables if hasattr(tables_resp, "tables") else tables_resp
+            return table_name in existing_tables
         except Exception:
             return False
 
@@ -1034,7 +1042,9 @@ class UltraRAG:
         table_name = self.config.books.table_name
 
         db = lancedb.connect(str(db_path))
-        table_exists = table_name in db.table_names()
+        tables_resp = db.list_tables()
+        existing_tables = tables_resp.tables if hasattr(tables_resp, "tables") else tables_resp
+        table_exists = table_name in existing_tables
 
         if mode == "overwrite" and table_exists:
             logger.info(f"Dropping existing books table: {table_name}")
@@ -1063,9 +1073,53 @@ class UltraRAG:
                 return False
 
             db = lancedb.connect(str(db_path))
-            return table_name in db.table_names()
+            tables_resp = db.list_tables()
+            existing_tables = tables_resp.tables if hasattr(tables_resp, "tables") else tables_resp
+            return table_name in existing_tables
         except Exception:
             return False
+
+    def _get_books_indexed_paths(self) -> set[str]:
+        """Return distinct file paths currently present in the books index table."""
+        import lancedb
+
+        if not self.books_index_exists():
+            return set()
+
+        db = lancedb.connect(str(self.config.vector_db.lancedb_path))
+        table = db.open_table(self.config.books.table_name)
+
+        paths: set[str] = set()
+        try:
+            rows = table.search().limit(2_000_000).to_list()
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                metadata = row.get("metadata", {})
+                if isinstance(metadata, dict):
+                    file_path = metadata.get("file_path")
+                    if file_path:
+                        paths.add(file_path)
+        except Exception as e:
+            logger.warning("Could not inspect books index coverage: %s", e)
+            return set()
+
+        return paths
+
+    def _books_index_alignment(self, current_books: set[str]) -> dict:
+        """Compare current BOOKS_PATH files to paths present in books index."""
+        indexed_books = self._get_books_indexed_paths()
+        overlap = len(indexed_books & current_books)
+        current_count = len(current_books)
+        coverage = (overlap / current_count) if current_count else 0.0
+        return {
+            "current_count": current_count,
+            "indexed_count": len(indexed_books),
+            "overlap_count": overlap,
+            "coverage": coverage,
+            "missing_from_index": max(0, current_count - overlap),
+            "indexed_not_in_current": max(0, len(indexed_books) - overlap),
+        }
 
     def index_books(
         self,
@@ -1083,7 +1137,6 @@ class UltraRAG:
             interactive: If True, prompt for choices; if False, auto-load existing
         """
         from book_loader import BookLoader
-        from chunking import ObsidianChunker
 
         print("\n=== Indexing Books ===")
 
@@ -1102,6 +1155,7 @@ class UltraRAG:
         # Show stats
         loader = BookLoader(bks_path)
         stats = loader.get_book_stats()
+        current_book_paths = {str(p) for p in loader.discover_books()}
         print(f"\nFound {stats['total_books']} books ({stats['total_size_mb']} MB)")
         print(f"  EPUB: {stats['by_type'].get('epub', 0)}")
         print(f"  PDF: {stats['by_type'].get('pdf', 0)}")
@@ -1112,11 +1166,29 @@ class UltraRAG:
 
         # Check for existing index
         if not force_reindex and self.books_index_exists():
+            alignment = self._books_index_alignment(current_book_paths)
+            has_mismatch = alignment["coverage"] < 0.95 or alignment["indexed_not_in_current"] > 0
+
             if interactive:
                 print("\nExisting books index found.")
+                print(
+                    f"Index coverage vs current BOOKS_PATH: "
+                    f"{alignment['overlap_count']}/{alignment['current_count']} "
+                    f"({alignment['coverage']:.1%})"
+                )
+                if has_mismatch:
+                    print("⚠️  Index appears stale or built from a different books path.")
+                    print(
+                        f"    Missing from index: {alignment['missing_from_index']} | "
+                        f"Extra in index: {alignment['indexed_not_in_current']}"
+                    )
                 print("Options:")
-                print("  1. Load existing (fast)")
-                print("  2. Recreate (slow)")
+                if has_mismatch:
+                    print("  1. Load existing (fast, NOT recommended)")
+                    print("  2. Recreate (recommended)")
+                else:
+                    print("  1. Load existing (fast)")
+                    print("  2. Recreate (slow)")
                 print("  3. Cancel")
 
                 choice = input("\nChoice (1/2/3): ").strip()
@@ -1130,12 +1202,18 @@ class UltraRAG:
                     return
                 # choice == "2" continues to recreate
             else:
-                # Non-interactive: just load existing
-                if self.load_books_index():
+                # Non-interactive: load existing only if coverage looks valid
+                if not has_mismatch and self.load_books_index():
                     print("Books index loaded!")
                     self._setup_federated_engine()
                     return
-                print("Failed to load. Will create new index...")
+                if has_mismatch:
+                    print(
+                        "Existing books index appears stale for current BOOKS_PATH. "
+                        "Rebuilding..."
+                    )
+                else:
+                    print("Failed to load existing books index. Will create new index...")
 
         # Setup vector store
         mode = "overwrite" if force_reindex or self.books_index_exists() else "create"
@@ -1156,11 +1234,11 @@ class UltraRAG:
         from book_chunker import BookChunker, BookChunkConfig
 
         chunk_config = BookChunkConfig(
-            chunk_size=1024,  # Larger chunks for books
-            chunk_overlap=128,
-            min_chunk_size=100,
-            respect_chapters=True,
-            respect_paragraphs=True
+            chunk_size=self.config.books.book_chunk_size,
+            chunk_overlap=self.config.books.book_chunk_overlap,
+            min_chunk_size=self.config.books.book_min_chunk_size,
+            respect_chapters=self.config.books.book_respect_chapters,
+            respect_paragraphs=self.config.books.book_respect_paragraphs,
         )
         chunker = BookChunker(config=chunk_config)
 
@@ -2176,7 +2254,7 @@ def main():
 
     # Check for existing index
     try:
-        has_existing_index = index_exists(rag.config.vector_db)
+        has_existing_index = index_exists(rag.config.vector_db, table_name=rag.config.vector_db.vault_table)
     except Exception as e:
         logger.error(f"Failed to check for existing index: {e}", exc_info=True)
         print(f"❌ Error checking for existing index: {e}")
@@ -2250,13 +2328,14 @@ def main():
         print("\nNo index available. Exiting.")
         sys.exit(1)
 
-    # Check for conversations index
-    has_conv_index = rag.conversations_index_exists()
-    if has_conv_index:
-        print("\n📚 Conversations index detected!")
-        if rag.load_conversations_index():
-            rag._setup_federated_engine()
-            print("Federated search enabled (vault + conversations)")
+    # Check for conversations index (unless already auto-loaded during vault load)
+    if rag.conversations_index is None:
+        has_conv_index = rag.conversations_index_exists()
+        if has_conv_index:
+            print("\n📚 Conversations index detected!")
+            if rag.load_conversations_index():
+                rag._setup_federated_engine()
+                print("Federated search enabled (vault + conversations)")
 
     # Check for RAPTOR index
     if rag.config.raptor.enabled:
