@@ -11,6 +11,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterator
@@ -123,22 +124,118 @@ class CalibreMetadataExtractor:
             conn.close()
 
     @staticmethod
-    def _parse_filename(filename: str) -> tuple[str, str]:
-        """Extract author and title from filename pattern 'Author - Title.ext'.
+    def _normalize_text(text: str) -> str:
+        """Normalize text for robust fuzzy matching."""
+        if not text:
+            return ""
+        text = unicodedata.normalize("NFKD", text)
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+        text = text.lower()
+        # Remove common bracketed noise: edition/year/format notes
+        text = re.sub(r"[\(\[\{].*?[\)\]\}]", " ", text)
+        # Normalize separators and punctuation
+        text = re.sub(r"[_\.\-–—]+", " ", text)
+        # Keep letters/digits from all scripts (Greek, Latin, etc.)
+        text = "".join(ch if (ch.isalnum() or ch.isspace()) else " " for ch in text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
 
-        Returns (author, title). If no separator found, returns ("", filename).
+    @classmethod
+    def _parse_filename_candidates(cls, filename: str) -> list[tuple[str, str]]:
+        """Extract possible (author, title) pairs from filename.
+
+        Handles both:
+        - Author - Title
+        - Title - Author
         """
         stem = Path(filename).stem
-        # Try "Author - Title" pattern
-        if " - " in stem:
-            parts = stem.split(" - ", 1)
-            return parts[0].strip(), parts[1].strip()
-        return "", stem.strip()
+        stem = re.sub(r"\s+", " ", stem).strip()
 
-    @staticmethod
-    def _similarity(a: str, b: str) -> float:
-        """Compute similarity ratio between two strings (case-insensitive)."""
-        return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+        separators = [" - ", " — ", " – ", " by "]
+        candidates: list[tuple[str, str]] = []
+
+        for sep in separators:
+            if sep in stem:
+                left, right = [p.strip() for p in stem.split(sep, 1)]
+                if left and right:
+                    candidates.append((left, right))
+                    candidates.append((right, left))
+
+        # Fallback: no reliable author split
+        if not candidates:
+            candidates.append(("", stem))
+
+        # Deduplicate while preserving order
+        seen: set[tuple[str, str]] = set()
+        out: list[tuple[str, str]] = []
+        for a, t in candidates:
+            k = (a, t)
+            if k not in seen:
+                seen.add(k)
+                out.append(k)
+        return out
+
+    @classmethod
+    def _parse_filename(cls, filename: str) -> tuple[str, str]:
+        """Backward-compatible single candidate parser.
+
+        Prefers the first candidate from `_parse_filename_candidates`, which
+        preserves previous behavior for standard `Author - Title` filenames.
+        """
+        candidates = cls._parse_filename_candidates(filename)
+        if not candidates:
+            stem = Path(filename).stem.strip()
+            return "", stem
+        return candidates[0]
+
+    @classmethod
+    def _similarity(cls, a: str, b: str) -> float:
+        """Compute robust similarity using sequence + token overlap."""
+        a_norm = cls._normalize_text(a)
+        b_norm = cls._normalize_text(b)
+        if not a_norm or not b_norm:
+            return 0.0
+
+        seq = SequenceMatcher(None, a_norm, b_norm).ratio()
+
+        a_tokens = set(a_norm.split())
+        b_tokens = set(b_norm.split())
+        if a_tokens and b_tokens:
+            jaccard = len(a_tokens & b_tokens) / len(a_tokens | b_tokens)
+        else:
+            jaccard = 0.0
+
+        contains_bonus = 0.0
+        if (a_norm in b_norm or b_norm in a_norm) and min(len(a_norm), len(b_norm)) >= 6:
+            contains_bonus = 0.1
+
+        return min(1.0, 0.65 * seq + 0.35 * jaccard + contains_bonus)
+
+    @classmethod
+    def _author_similarity(cls, a: str, b: str) -> float:
+        """Author-aware similarity with token-order tolerance."""
+        if not a or not b:
+            return 0.0
+
+        def variants(x: str) -> list[str]:
+            x_norm = cls._normalize_text(x)
+            toks = x_norm.split()
+            out = [x_norm]
+            if len(toks) >= 2:
+                out.append(" ".join(reversed(toks)))
+                out.append(f"{toks[-1]} {toks[0]}")
+            return [v for v in out if v]
+
+        a_vars = variants(a)
+        b_vars = variants(b)
+        if not a_vars or not b_vars:
+            return 0.0
+
+        return max(
+            cls._similarity(va, vb)
+            for va in a_vars
+            for vb in b_vars
+        )
 
     def match_book(self, book_path: Path) -> BookMetadata | None:
         """Fuzzy-match a book file to a Calibre entry.
@@ -152,7 +249,7 @@ class CalibreMetadataExtractor:
         if not entries:
             return None
 
-        file_author, file_title = self._parse_filename(book_path.name)
+        filename_candidates = self._parse_filename_candidates(book_path.name)
         file_size = book_path.stat().st_size if book_path.exists() else 0
         file_type = book_path.suffix.lower().lstrip(".")
 
@@ -160,26 +257,33 @@ class CalibreMetadataExtractor:
         best_score = 0.0
 
         for entry in entries:
-            title_sim = self._similarity(file_title, entry["title"])
+            calibre_author = entry["authors"].split(",")[0].strip() if entry["authors"] else ""
+            entry_best = 0.0
 
-            if file_author:
-                # First author from comma-separated list
-                calibre_author = entry["authors"].split(",")[0].strip() if entry["authors"] else ""
-                author_sim = self._similarity(file_author, calibre_author)
+            for file_author, file_title in filename_candidates:
+                title_sim = self._similarity(file_title, entry["title"])
 
-                # Dual-gate: both must pass threshold
-                if title_sim < self.match_threshold or author_sim < self.match_threshold:
-                    continue
+                if file_author:
+                    author_sim = self._author_similarity(file_author, calibre_author)
 
-                combined_score = (title_sim + author_sim) / 2
-            else:
-                # No author in filename — title-only matching with higher bar
-                if title_sim < self.match_threshold:
-                    continue
-                combined_score = title_sim * 0.9  # Slight penalty for no author confirmation
+                    # Dual-gate with mild author tolerance for formatting variance
+                    if title_sim < self.match_threshold or author_sim < (self.match_threshold - 0.08):
+                        continue
 
-            if combined_score > best_score:
-                best_score = combined_score
+                    combined_score = 0.65 * title_sim + 0.35 * author_sim
+                else:
+                    # No reliable author from filename — require stronger title evidence
+                    if title_sim < (self.match_threshold + 0.05):
+                        continue
+                    combined_score = title_sim * 0.9
+
+                entry_best = max(entry_best, combined_score)
+
+            if entry_best <= 0:
+                continue
+
+            if entry_best > best_score:
+                best_score = entry_best
                 best_match = entry
 
         if best_match is None:
@@ -280,6 +384,12 @@ class BookMetadataCache:
     def put(self, meta: BookMetadata):
         """Store a BookMetadata entry in the cache."""
         key = self._cache_key(meta)
+        # If this file previously mapped to another key (e.g. hash -> calibre),
+        # remove stale entry to keep cache cardinality aligned with file paths.
+        old_key = self._by_file_path.get(meta.file_path)
+        if old_key and old_key != key:
+            self._entries.pop(old_key, None)
+
         self._entries[key] = {
             "title": meta.title,
             "file_path": meta.file_path,
