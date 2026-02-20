@@ -1,8 +1,9 @@
 """Book document loader for EPUB and PDF files."""
 import hashlib
 import logging
+import re
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Iterable
 from llama_index.core import Document, SimpleDirectoryReader
 from llama_index.core.schema import TextNode
 from tqdm import tqdm
@@ -25,6 +26,81 @@ class BookLoader:
         """
         self.books_path = books_path
         self._cache = None
+
+    @staticmethod
+    def _normalize_line(s: str) -> str:
+        return re.sub(r"\s+", " ", s).strip()
+
+    @staticmethod
+    def _looks_like_page_number(line: str) -> bool:
+        s = line.strip().lower()
+        if not s:
+            return False
+        if re.fullmatch(r"(?:page\s*)?\d{1,5}", s):
+            return True
+        if re.fullmatch(r"\d{1,5}\s*/\s*\d{1,5}", s):
+            return True
+        return False
+
+    def _merge_pdf_documents(self, documents: List[Document]) -> List[Document]:
+        """Merge page-level PDF Documents into a single Document.
+
+        SimpleDirectoryReader often returns one Document per page for PDFs.
+        Chunking works better (chapter detection, paragraph recovery, overlap)
+        when we feed the chunker a full-book stream instead of isolated pages.
+        """
+        if not documents:
+            return []
+        if len(documents) == 1:
+            return documents
+
+        page_texts: list[list[str]] = []
+        # Track likely headers/footers by looking at top/bottom lines across pages.
+        header_counts: dict[str, int] = {}
+        footer_counts: dict[str, int] = {}
+
+        for doc in documents:
+            text = (doc.text or "").replace("\r\n", "\n").replace("\r", "\n")
+            lines = [self._normalize_line(ln) for ln in text.split("\n")]
+            lines = [ln for ln in lines if ln]
+            page_texts.append(lines)
+
+            top = [ln for ln in lines[:4] if not self._looks_like_page_number(ln)]
+            bottom = [ln for ln in lines[-4:] if not self._looks_like_page_number(ln)]
+
+            for ln in top:
+                if 4 <= len(ln) <= 120:
+                    header_counts[ln] = header_counts.get(ln, 0) + 1
+            for ln in bottom:
+                if 4 <= len(ln) <= 120:
+                    footer_counts[ln] = footer_counts.get(ln, 0) + 1
+
+        page_count = len(page_texts)
+        # Remove repeated headers/footers that show up across many pages.
+        threshold = max(3, int(page_count * 0.20))
+        repeated_headers = {k for k, v in header_counts.items() if v >= threshold}
+        repeated_footers = {k for k, v in footer_counts.items() if v >= threshold}
+
+        cleaned_pages: list[str] = []
+        for lines in page_texts:
+            cleaned: list[str] = []
+            for ln in lines:
+                if self._looks_like_page_number(ln):
+                    continue
+                if ln in repeated_headers or ln in repeated_footers:
+                    continue
+                cleaned.append(ln)
+            cleaned_pages.append("\n".join(cleaned).strip())
+
+        merged_text = "\n\n".join([p for p in cleaned_pages if p])
+
+        # Prefer metadata from the first page; drop page-specific keys if present.
+        merged_meta = dict(documents[0].metadata or {})
+        for k in ("page_label", "page_number", "page", "page_id", "page_index"):
+            merged_meta.pop(k, None)
+        merged_meta["pdf_page_count"] = page_count
+        merged_doc = Document(text=merged_text, metadata=merged_meta)
+        return [merged_doc]
 
     def set_enrichment_cache(self, cache):
         """Set optional enrichment cache for metadata lookup during loading."""
@@ -66,6 +142,11 @@ class BookLoader:
             # Enhance metadata for each document
             file_type = book_path.suffix.lower().lstrip(".")
             title = self._extract_title(book_path, documents)
+
+            # For PDFs, SimpleDirectoryReader commonly returns one doc per page.
+            # Merge pages into a single book-level doc to improve downstream chunking.
+            if file_type == "pdf" and documents:
+                documents = self._merge_pdf_documents(documents)
 
             # Lookup enriched metadata if cache available
             enriched = self._cache.lookup(book_path) if self._cache else None

@@ -250,6 +250,51 @@ class TestBookLoaderEnrichment:
             assert docs[0].metadata["book_categories"] == ["productivity", "focus"]
             assert docs[0].metadata["metadata_source"] == "calibre"
 
+    @pytest.mark.unit
+    def test_load_book_merges_pdf_pages_and_strips_headers(self, tmp_path):
+        """
+        GIVEN: A PDF that SimpleDirectoryReader returns as one Document per page
+        WHEN: load_book() is called
+        THEN: Pages are merged into a single Document and repeated headers/footers are removed
+        """
+        from book_loader import BookLoader
+
+        page1 = Document(
+            text="My Book Title\n\nThis is page one content.\n\n1",
+            metadata={"page_label": 1}
+        )
+        page2 = Document(
+            text="My Book Title\n\nThis is page two content.\n\n2",
+            metadata={"page_label": 2}
+        )
+        page3 = Document(
+            text="My Book Title\n\nThis is page three content.\n\n3",
+            metadata={"page_label": 3}
+        )
+
+        with patch('book_loader.SimpleDirectoryReader') as MockReader:
+            MockReader.return_value.load_data.return_value = [page1, page2, page3]
+
+            loader = BookLoader(tmp_path)
+            book_path = tmp_path / "test.pdf"
+            book_path.write_bytes(b"x" * 100)
+
+            docs = loader.load_book(book_path)
+
+            assert len(docs) == 1
+            assert docs[0].metadata["file_type"] == "pdf"
+            assert docs[0].metadata["pdf_page_count"] == 3
+            # Header removed
+            assert "My Book Title" not in docs[0].text
+            # Page numbers removed
+            assert "\n\n1" not in docs[0].text
+            assert "\n\n2" not in docs[0].text
+            assert "\n\n3" not in docs[0].text
+            # Content preserved
+            assert "page one content" in docs[0].text
+            assert "page two content" in docs[0].text
+            assert "page three content" in docs[0].text
+
 
 class TestBookChunker:
     """
@@ -375,6 +420,44 @@ class TestBookChunker:
 
         # Should have multiple chunks due to content exceeding chunk_size
         assert len(nodes) > 1
+
+    @pytest.mark.unit
+    def test_chunk_document_applies_overlap_between_chunks(self):
+        """
+        GIVEN: Paragraph-based chunking with overlap enabled
+        WHEN: chunk boundaries are created
+        THEN: Tail paragraph(s) overlap into the next chunk
+        """
+        from book_chunker import BookChunker, BookChunkConfig
+
+        p1 = "alpha " * 10
+        p2 = "beta " * 10
+        p3 = "gamma " * 10
+        p4 = "delta " * 10
+        content = f"{p1}\n\n{p2}\n\n{p3}\n\n{p4}"
+
+        doc = Document(
+            text=content,
+            metadata={"book_title": "Overlap Book", "source_type": "books"}
+        )
+
+        config = BookChunkConfig(
+            chunk_size=20,
+            chunk_overlap=10,
+            min_chunk_size=10,
+            respect_paragraphs=True
+        )
+        chunker = BookChunker(config=config)
+        nodes = chunker.chunk_document(doc)
+
+        assert len(nodes) >= 3
+        texts = [n.text for n in nodes]
+        # p2 should overlap from chunk 1 into chunk 2
+        assert "beta" in texts[0]
+        assert "beta" in texts[1]
+        # p3 should overlap from chunk 2 into chunk 3
+        assert "gamma" in texts[1]
+        assert "gamma" in texts[2]
 
     @pytest.mark.unit
     def test_is_chapter_heading_patterns(self):
