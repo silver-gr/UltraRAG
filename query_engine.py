@@ -420,32 +420,29 @@ class QueryTransformRetriever(BaseRetriever):
             )
             logger.info(f"Generated {len(query_variations)} query variations")
 
-            # Retrieve with each variation
-            all_nodes: Dict[str, NodeWithScore] = {}  # Use dict to deduplicate by node_id
+            # Retrieve with each variation using Reciprocal Rank Fusion
+            RRF_K = 60  # Standard RRF constant
+            rrf_scores: Dict[str, float] = {}
+            node_map: Dict[str, NodeWithScore] = {}
 
             for i, query_var in enumerate(query_variations):
                 logger.debug(f"Retrieving with variation {i+1}: {query_var[:100]}...")
                 var_bundle = QueryBundle(query_str=query_var)
                 var_nodes = self.base_retriever.retrieve(var_bundle)
 
-                # Add nodes to dict (later queries can override scores)
-                for node in var_nodes:
+                for rank, node in enumerate(var_nodes):
                     node_id = node.node.node_id
-                    if node_id in all_nodes:
-                        # Use reciprocal rank fusion scoring
-                        # RRF score = sum(1 / (k + rank)) where k=60 is standard
-                        existing_score = all_nodes[node_id].score or 0
-                        new_score = node.score or 0
-                        # Combine scores using max (we want best retrieval)
-                        all_nodes[node_id].score = max(existing_score, new_score)
-                    else:
-                        all_nodes[node_id] = node
+                    rrf_scores[node_id] = rrf_scores.get(node_id, 0) + 1.0 / (RRF_K + rank + 1)
+                    # Keep the node copy with highest original score for metadata
+                    if node_id not in node_map or (node.score or 0) > (node_map[node_id].score or 0):
+                        node_map[node_id] = node
 
-            # Convert back to list and sort by score
-            combined_nodes = list(all_nodes.values())
-            combined_nodes.sort(key=lambda x: x.score or 0, reverse=True)
+            # Apply RRF scores and sort
+            for node_id, rrf_score in rrf_scores.items():
+                node_map[node_id].score = rrf_score
+            combined_nodes = sorted(node_map.values(), key=lambda n: n.score or 0, reverse=True)
 
-            logger.info(f"Retrieved {len(combined_nodes)} unique nodes from multi-query expansion")
+            logger.info(f"Retrieved {len(combined_nodes)} unique nodes from multi-query RRF fusion")
 
             # Augment with bilingual expansion if enabled
             if self.enable_bilingual:
@@ -461,8 +458,10 @@ class QueryTransformRetriever(BaseRetriever):
             )
             logger.info(f"Generated {len(query_variations)} query variations for HyDE transformation")
 
-            # Generate hypothetical document for each variation
-            all_nodes: Dict[str, NodeWithScore] = {}
+            # Generate hypothetical document for each variation using RRF
+            RRF_K = 60
+            rrf_scores: Dict[str, float] = {}
+            node_map: Dict[str, NodeWithScore] = {}
 
             for i, query_var in enumerate(query_variations):
                 logger.debug(f"HyDE transform variation {i+1}/{len(query_variations)}")
@@ -475,21 +474,18 @@ class QueryTransformRetriever(BaseRetriever):
 
                 var_nodes = self.base_retriever.retrieve(hyde_bundle)
 
-                # Combine using same deduplication strategy
-                for node in var_nodes:
+                for rank, node in enumerate(var_nodes):
                     node_id = node.node.node_id
-                    if node_id in all_nodes:
-                        existing_score = all_nodes[node_id].score or 0
-                        new_score = node.score or 0
-                        all_nodes[node_id].score = max(existing_score, new_score)
-                    else:
-                        all_nodes[node_id] = node
+                    rrf_scores[node_id] = rrf_scores.get(node_id, 0) + 1.0 / (RRF_K + rank + 1)
+                    if node_id not in node_map or (node.score or 0) > (node_map[node_id].score or 0):
+                        node_map[node_id] = node
 
-            # Convert and sort
-            combined_nodes = list(all_nodes.values())
-            combined_nodes.sort(key=lambda x: x.score or 0, reverse=True)
+            # Apply RRF scores and sort
+            for node_id, rrf_score in rrf_scores.items():
+                node_map[node_id].score = rrf_score
+            combined_nodes = sorted(node_map.values(), key=lambda n: n.score or 0, reverse=True)
 
-            logger.info(f"Retrieved {len(combined_nodes)} unique nodes from combined HyDE + multi-query")
+            logger.info(f"Retrieved {len(combined_nodes)} unique nodes from combined HyDE + multi-query RRF")
 
             # Augment with bilingual expansion if enabled
             if self.enable_bilingual:
@@ -524,29 +520,28 @@ class QueryTransformRetriever(BaseRetriever):
 
         logger.info(f"Generated {len(query_variations)} bilingual query variations")
 
-        # Retrieve with each query variation
-        all_nodes: Dict[str, NodeWithScore] = {}
+        # Retrieve with each query variation using RRF
+        RRF_K = 60
+        rrf_scores: Dict[str, float] = {}
+        node_map: Dict[str, NodeWithScore] = {}
 
         for i, query_var in enumerate(query_variations):
             logger.debug(f"Retrieving with bilingual variation {i+1}: {query_var[:100]}...")
             var_bundle = QueryBundle(query_str=query_var)
             var_nodes = self.base_retriever.retrieve(var_bundle)
 
-            # Combine results with deduplication
-            for node in var_nodes:
+            for rank, node in enumerate(var_nodes):
                 node_id = node.node.node_id
-                if node_id in all_nodes:
-                    existing_score = all_nodes[node_id].score or 0
-                    new_score = node.score or 0
-                    all_nodes[node_id].score = max(existing_score, new_score)
-                else:
-                    all_nodes[node_id] = node
+                rrf_scores[node_id] = rrf_scores.get(node_id, 0) + 1.0 / (RRF_K + rank + 1)
+                if node_id not in node_map or (node.score or 0) > (node_map[node_id].score or 0):
+                    node_map[node_id] = node
 
-        # Sort by score
-        combined_nodes = list(all_nodes.values())
-        combined_nodes.sort(key=lambda x: x.score or 0, reverse=True)
+        # Apply RRF scores and sort
+        for node_id, rrf_score in rrf_scores.items():
+            node_map[node_id].score = rrf_score
+        combined_nodes = sorted(node_map.values(), key=lambda n: n.score or 0, reverse=True)
 
-        logger.info(f"Retrieved {len(combined_nodes)} unique nodes from bilingual expansion")
+        logger.info(f"Retrieved {len(combined_nodes)} unique nodes from bilingual RRF expansion")
         return combined_nodes
 
     def _combine_with_bilingual(self, nodes: List[NodeWithScore], original_query: str) -> List[NodeWithScore]:
@@ -568,28 +563,30 @@ class QueryTransformRetriever(BaseRetriever):
         # Get additional nodes from bilingual queries
         bilingual_nodes = self._retrieve_with_bilingual(original_query)
 
-        # Merge with existing nodes
-        all_nodes: Dict[str, NodeWithScore] = {}
+        # Merge using RRF: treat primary results as one ranked list, bilingual as another
+        RRF_K = 60
+        rrf_scores: Dict[str, float] = {}
+        node_map: Dict[str, NodeWithScore] = {}
 
-        # Add existing nodes first
-        for node in nodes:
-            all_nodes[node.node.node_id] = node
-
-        # Add bilingual nodes (don't override existing higher scores)
-        for node in bilingual_nodes:
+        # Primary results as ranked list
+        for rank, node in enumerate(nodes):
             node_id = node.node.node_id
-            if node_id in all_nodes:
-                existing_score = all_nodes[node_id].score or 0
-                new_score = node.score or 0
-                all_nodes[node_id].score = max(existing_score, new_score)
-            else:
-                all_nodes[node_id] = node
+            rrf_scores[node_id] = rrf_scores.get(node_id, 0) + 1.0 / (RRF_K + rank + 1)
+            node_map[node_id] = node
 
-        # Sort by score
-        combined_nodes = list(all_nodes.values())
-        combined_nodes.sort(key=lambda x: x.score or 0, reverse=True)
+        # Bilingual results as ranked list
+        for rank, node in enumerate(bilingual_nodes):
+            node_id = node.node.node_id
+            rrf_scores[node_id] = rrf_scores.get(node_id, 0) + 1.0 / (RRF_K + rank + 1)
+            if node_id not in node_map or (node.score or 0) > (node_map[node_id].score or 0):
+                node_map[node_id] = node
 
-        logger.info(f"Combined {len(nodes)} primary + bilingual = {len(combined_nodes)} total nodes")
+        # Apply RRF scores and sort
+        for node_id, rrf_score in rrf_scores.items():
+            node_map[node_id].score = rrf_score
+        combined_nodes = sorted(node_map.values(), key=lambda n: n.score or 0, reverse=True)
+
+        logger.info(f"Combined {len(nodes)} primary + bilingual = {len(combined_nodes)} total nodes (RRF)")
         return combined_nodes
 
 
@@ -627,10 +624,10 @@ class RAGQueryEngine:
     def _build_query_engine(self) -> RetrieverQueryEngine:
         """Build query engine with retrievers and post-processors."""
 
-        # Configure base retriever
+        # Configure base retriever (use retrieval_candidates for over-fetch)
         base_retriever = VectorIndexRetriever(
             index=self.index,
-            similarity_top_k=self.config.retrieval.top_k,
+            similarity_top_k=self.config.retrieval.retrieval_candidates,
         )
 
         # Wrap with query transformation if enabled
@@ -680,6 +677,15 @@ class RAGQueryEngine:
         if self.reranker:
             node_postprocessors.append(self.reranker)
 
+        # Add document diversity postprocessor (MMR) if enabled
+        if self.config.retrieval.enable_mmr:
+            node_postprocessors.append(
+                DocumentDiversityPostprocessor(
+                    max_chunks_per_document=self.config.retrieval.max_chunks_per_document
+                )
+            )
+            logger.info(f"MMR diversity enabled: max {self.config.retrieval.max_chunks_per_document} chunks/doc")
+
         # Add similarity filter
         node_postprocessors.append(
             SimilarityPostprocessor(
@@ -694,21 +700,30 @@ class RAGQueryEngine:
         # Configure response synthesizer with custom prompts
         qa_prompt = PromptTemplate(PTCF_TEMPLATE)
         refine_prompt = PromptTemplate(REFINE_TEMPLATE)
-        
+
         response_synthesizer = get_response_synthesizer(
             response_mode="compact",
             text_qa_template=qa_prompt,
             refine_template=refine_prompt,
             use_async=False
         )
-        
+
         # Build query engine
         query_engine = RetrieverQueryEngine(
             retriever=retriever,
             response_synthesizer=response_synthesizer,
             node_postprocessors=node_postprocessors,
         )
-        
+
+        # Setup Self-RAG response validator if enabled
+        if self.config.retrieval.validate_responses and self.config.retrieval.use_self_correction:
+            from self_correction import SelfRAGValidator
+            from llama_index.core import Settings
+            self._validator = SelfRAGValidator(Settings.llm)
+            logger.info("Self-RAG response validator enabled")
+        else:
+            self._validator = None
+
         return query_engine
     
     @trace_chain
@@ -740,6 +755,20 @@ class RAGQueryEngine:
         try:
             response = self.query_engine.query(query_str)
             logger.debug(f"Query completed successfully, {len(response.source_nodes)} sources retrieved")
+
+            # Self-RAG response validation (post-generation hallucination check)
+            if self._validator and response.response and response.source_nodes:
+                context = "\n\n".join(
+                    n.node.text[:500] for n in response.source_nodes[:5]
+                )
+                is_valid, explanation = self._validator.validate_response(
+                    query_str, response.response, context
+                )
+                if not is_valid:
+                    logger.warning(f"Self-RAG validation flagged response: {explanation}")
+                    if not hasattr(response, 'metadata') or response.metadata is None:
+                        response.metadata = {}
+                    response.metadata['validation_warning'] = explanation
 
             # Store in cache if enabled
             if should_use_cache and self.query_cache is not None:
@@ -836,7 +865,7 @@ class HybridQueryEngine:
                 self.bm25_retriever = BM25Retriever.from_defaults(
                     nodes=self.nodes,
                     stemmer=stemmer,
-                    similarity_top_k=self.config.retrieval.top_k
+                    similarity_top_k=self.config.retrieval.retrieval_candidates
                 )
                 logger.info(f"BM25 retriever initialized with {len(self.nodes)} nodes (bilingual stemming: {stemmer is not None})")
             except Exception as e:
@@ -849,10 +878,10 @@ class HybridQueryEngine:
         """Build query engine with hybrid retrieval."""
         from llama_index.core.retrievers import QueryFusionRetriever
 
-        # Vector retriever
+        # Vector retriever (use retrieval_candidates for over-fetch)
         vector_retriever = VectorIndexRetriever(
             index=self.index,
-            similarity_top_k=self.config.retrieval.top_k,
+            similarity_top_k=self.config.retrieval.retrieval_candidates,
         )
 
         # Prepare retrievers list
@@ -866,11 +895,12 @@ class HybridQueryEngine:
             logger.info("BM25 not available - using vector retrieval only with query variations")
 
         # Create fusion retriever with reciprocal rank fusion
+        # num_queries=1: disable internal LLM expansion (QueryTransformRetriever handles this)
         fusion_retriever = QueryFusionRetriever(
             retrievers=retrievers,
-            similarity_top_k=self.config.retrieval.top_k,
-            num_queries=3,  # Generate 3 variations of the query
-            mode="reciprocal_rerank",  # Use reciprocal rank fusion
+            similarity_top_k=self.config.retrieval.retrieval_candidates,
+            num_queries=1,
+            mode="reciprocal_rerank",
             use_async=False
         )
 
