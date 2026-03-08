@@ -377,13 +377,18 @@ gemini  # authenticate once
 
 Then set `LLM_BACKEND=cli` in your .env file.
 
-## Default Configuration (v1.4.0)
+## Default Configuration (v1.5.0)
 - LLM: `gemini-3-flash-preview` (backend: `api`, context caching enabled)
 - Embeddings: `voyage-4-lite` (200M free tokens, shared embedding space with voyage-4-large)
 - Reranker: `rerank-2.5` (200M free tokens/month)
 - Chunk size: 512 tokens, overlap: 75
-- Retrieval: top_k=75 → rerank to top_n=100 (UI controls display count)
+- Retrieval: retrieval_candidates=150 → rerank to top_n=20 (top_k=75 for UI display)
 - Similarity threshold: 0.3 (only applied when no reranker is configured)
+- HyDE temperature: 0.7 (separate from synthesis LLM temp 0.1)
+- Response validation: enabled (Self-RAG post-generation hallucination check)
+- MMR diversity: disabled by default (max 5 chunks/doc when enabled)
+- Multi-query fusion: proper Reciprocal Rank Fusion (RRF, k=60)
+- Research mode: uses all sub-queries per iteration (not just first)
 
 ## Obsidian URI Links
 Enable clickable source links that open notes directly in Obsidian:

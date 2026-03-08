@@ -183,10 +183,16 @@ class TestRetrievalConfig:
         """Test default retrieval configuration."""
         config = RetrievalConfig()
         assert config.top_k == 75
-        assert config.rerank_top_n == 100  # Let UI max_sources control display
+        assert config.retrieval_candidates == 150  # Over-fetch for reranker
+        assert config.rerank_top_n == 20  # Keep top 20 after reranking
         assert config.reranker_model == "rerank-2.5"  # No "voyage-" prefix!
         assert config.enable_hybrid_search is True
         assert config.similarity_threshold == 0.3  # Lowered from 0.7
+        assert config.validate_responses is True
+        assert config.hyde_temperature == 0.7
+        assert config.enable_mmr is False
+        assert config.max_chunks_per_document == 5
+        assert config.enable_evaluation_logging is False
 
 
 class TestRAGConfig:

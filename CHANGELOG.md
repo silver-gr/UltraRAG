@@ -13,6 +13,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.0] - 2026-03-08
+
+### Added
+- **Authentication & Multi-User**
+  - In-app authentication with admin/user roles (`ULTRARAG_AUTH_ENABLED`)
+  - Per-user storage isolation (query history, research exports)
+  - Rate limiting: global concurrency control + per-user cooldown
+  - User management CLI (`python -m scripts.manage_users`)
+  - Session timeout configuration
+- **Retrieval Stack Audit** (5 bug fixes + 6 features)
+  - Over-fetch ratio: `retrieval_candidates=150` feeds reranker, `rerank_top_n=20` keeps best (was 75 in, 100 out = no filtering)
+  - Multi-query RRF: proper Reciprocal Rank Fusion (k=60) replaces incorrect `max(score_a, score_b)` across 4 fusion sites
+  - SelfRAGValidator wired: post-generation hallucination check was dead code, now active
+  - All sub-queries used in research mode (was discarding `subqueries[1:]`)
+  - QueryFusionRetriever `num_queries=1` eliminates redundant LLM query expansion
+  - Document diversity postprocessor (`ENABLE_MMR`, `MAX_CHUNKS_PER_DOCUMENT=5`)
+  - HyDE temperature separation: dedicated LLM at temp=0.7 for hypothetical doc generation
+  - Retrieval evaluation framework: precision@k, recall@k, MRR, NDCG per query
+- **LanceDB Index Optimization**
+  - Auto-creates IVF_HNSW_SQ or IVF_PQ index on tables with 1000+ rows
+  - HNSW parameter exposure: `HNSW_M`, `HNSW_EF_CONSTRUCTION`, `HNSW_EF_SEARCH`
+  - Scalar/product quantization support (`ENABLE_QUANTIZATION`, `QUANTIZATION_TYPE`)
+- **Saved Items Integration (TheSource)**
+  - Federated search across vault + TheSource saved items
+  - Configurable weight (`SAVED_ITEMS_WEIGHT`) and LanceDB path
+- **Infrastructure**
+  - HTTPS via auto-generated dev certificates (`scripts/generate_dev_certs.sh`)
+  - Startup script with TLS automation (`start.sh`)
+
+### Changed
+- Default `rerank_top_n` from 100 to 20 (reranker now actually filters)
+- Default `retrieval_candidates` introduced at 150 (over-fetch for reranker)
+- Embedding model default: `voyage-4-lite` (was `voyage-3.5-lite`)
+- Verified Voyage `input_type` dispatched correctly by LlamaIndex (no change needed)
+- Per-user query history replaces global `data/query_history.json`
+
+### Fixed
+- Reranker received fewer candidates than it returned (no-op reranking)
+- Multi-query fusion used max-score instead of RRF (documents in multiple variations not boosted)
+- SelfRAGValidator was dead code (never called post-generation)
+- Research mode discarded all sub-queries except first (~3x coverage lost)
+- QueryFusionRetriever generated 3 redundant LLM query variations
+- HyDE duplicate generation race condition
+- LanceDB `list_tables` API compatibility across versions
+- Conversation loader excluded `_excluded` directories
+
+---
+
+## [1.4.0] - 2026-02-19
+
+### Added
+- **Book Library** (EPUB/PDF federated search)
+  - Book indexing with PDF page merging and configurable chunking
+  - Calibre metadata enrichment (fuzzy matching, stale cache handling)
+  - Optional web metadata enrichment utilities
+  - Book category/author filter UI in Streamlit
+  - Book filtering via native LanceDB WHERE clauses
+  - Book commands in interactive CLI (`@books`) and non-interactive CLI
+  - 2-stage Book-Summary RAPTOR retrieval
+  - Configurable: `BOOKS_ENABLED`, `BOOKS_PATH`, `BOOKS_WEIGHT`, `BOOKS_TABLE_NAME`
+- **Obsession Radar**
+  - Recurring theme detection across queries and research sessions
+- **Non-Interactive CLI** (`cli.py`)
+  - Agent/automation-friendly interface: `python -m cli research|query|status`
+  - Structured YAML/JSON output on stdout, logs on stderr
+  - Depth modes: `quick` (vault), `standard` (vault+conversations), `deep` (iterative)
+- **Glass Morphism UI Redesign**
+  - Modern visual design with glass morphism effects
+  - Citation renumbering fix
+
+### Changed
+- Source numbering added to LLM context for accurate inline citations
+- Federated retrieval uses reserved-slot source diversity (prevents single-source dominance)
+- Book chunking parameters made configurable via env vars
+- Streamlit port explicitly set to 9001
+
+### Fixed
+- Citation renumbering in UI after source filtering
+- Source numbering mismatch between LLM context and displayed sources
+- Default table name restored to `obsidian_embeddings`
+
+---
+
 ## [1.3.0] - 2026-01-21
 
 ### Added
