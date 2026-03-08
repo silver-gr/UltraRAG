@@ -51,7 +51,7 @@ def index_vault(config: RAGConfig) -> VectorStoreIndex | None:
 
     # Validate config
     if not config.vault_path or not Path(config.vault_path).exists():
-        raise ConfigurationError("VAULT_PATH", "/path/to/obsidian/vault")
+        raise ConfigurationError("OBSIDIAN_VAULT_PATH", "/path/to/obsidian/vault")
 
     # Load documents
     from loader import ObsidianLoader
@@ -110,9 +110,10 @@ def index_conversations(config: RAGConfig) -> VectorStoreIndex | None:
     Raises:
         ConfigurationError: If conversations_path is invalid
     """
-    logger.info("Starting conversations indexing | path=%s", config.conversations_path)
+    conversations_path = config.conversations.path
+    logger.info("Starting conversations indexing | path=%s", conversations_path)
 
-    if not config.conversations_path or not Path(config.conversations_path).exists():
+    if not conversations_path or not Path(conversations_path).exists():
         raise ConfigurationError("CONVERSATIONS_PATH", "/path/to/exports")
 
     from conversation_loader import ConversationLoader, ConversationChunker
@@ -120,7 +121,7 @@ def index_conversations(config: RAGConfig) -> VectorStoreIndex | None:
     from vector_store import get_vector_store, create_vector_index
 
     # Load conversations
-    loader = ConversationLoader(Path(config.conversations_path))
+    loader = ConversationLoader(Path(conversations_path))
     documents = loader.load_all()
 
     if not documents:
@@ -203,7 +204,8 @@ def index_books(config: RAGConfig) -> VectorStoreIndex | None:
     vector_store = get_vector_store(
         config.vector_db,
         mode="overwrite",
-        table_name=config.books.table_name
+        table_name=config.books.table_name,
+        flat_metadata=False,
     )
     index = create_vector_index(nodes, vector_store, embed_model)
 
@@ -400,7 +402,12 @@ def load_index(
     from vector_store import load_vector_index, get_vector_store
 
     embed_model = get_embedding_model(config.embedding)
-    vector_store = get_vector_store(config.vector_db, mode="append", table_name=table_name)
+    vector_store = get_vector_store(
+        config.vector_db,
+        mode="append",
+        table_name=table_name,
+        flat_metadata=(source != "books"),
+    )
 
     index = load_vector_index(vector_store, embed_model, config.vector_db, table_name=table_name)
 

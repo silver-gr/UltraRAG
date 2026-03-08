@@ -6,6 +6,7 @@ Based on Khoj's research mode (141% accuracy improvement on benchmarks).
 
 import logging
 import re
+import time
 from typing import List, Optional, Set, Dict, Any
 from dataclasses import dataclass, field
 from enum import Enum
@@ -16,6 +17,37 @@ from llama_index.core.retrievers import BaseRetriever
 from observability import trace_chain, trace_span, is_tracing_enabled
 
 logger = logging.getLogger(__name__)
+
+
+def llm_complete_with_retry(llm, prompt, max_retries=3, default_wait=45):
+    """Call llm.complete() with retry on 429 rate limit errors.
+
+    Parses the retry delay from the Gemini error message when available,
+    otherwise falls back to default_wait seconds.
+    """
+    for attempt in range(1, max_retries + 1):
+        try:
+            return llm.complete(prompt)
+        except Exception as e:
+            error_str = str(e)
+            is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+            if not is_rate_limit:
+                raise
+
+            if attempt >= max_retries:
+                raise
+
+            # Parse retry delay from error message (e.g. "retry in 39.434500361s")
+            wait_time = default_wait
+            retry_match = re.search(r'retry\s+(?:in|after)\s+([\d.]+)s', error_str, re.IGNORECASE)
+            if retry_match:
+                wait_time = float(retry_match.group(1)) + 2  # Add 2s buffer
+
+            logger.warning(
+                f"Rate limit hit (attempt {attempt}/{max_retries}), "
+                f"waiting {wait_time:.0f}s before retry..."
+            )
+            time.sleep(wait_time)
 
 
 class IndexProfile(Enum):
@@ -841,9 +873,8 @@ Retrieved Information (top 20 chunks from knowledge base):
 {context}"""
 
             try:
-                import time
                 start_time = time.time()
-                result = self.gap_analysis_llm.complete(prompt).text.strip()
+                result = llm_complete_with_retry(self.gap_analysis_llm, prompt).text.strip()
                 elapsed = time.time() - start_time
                 logger.info(f"Gap analysis LLM call took {elapsed:.1f}s (model: {self.GAP_ANALYSIS_MODEL})")
             except Exception as e:
@@ -942,9 +973,8 @@ Respond with one query per line, numbered:
 3. <third query>"""
 
         try:
-            import time
             start_time = time.time()
-            result = self.llm.complete(prompt).text.strip()
+            result = llm_complete_with_retry(self.llm, prompt).text.strip()
             elapsed = time.time() - start_time
             logger.info(f"Sub-query generation LLM call took {elapsed:.1f}s (main LLM)")
             logger.info(f"Sub-query generation result:\n{result}")

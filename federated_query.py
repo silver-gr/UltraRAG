@@ -1,5 +1,8 @@
 """Federated query engine for querying multiple indexes."""
 import logging
+import hashlib
+import re
+from collections import defaultdict
 from typing import List, Optional, Dict, Any, Literal
 from dataclasses import dataclass
 import asyncio
@@ -39,6 +42,7 @@ def _get_federated_template(source_types: List[str]) -> str:
     has_conv = "conversations" in source_types
     has_web = "web" in source_types
     has_books = "books" in source_types
+    has_saved = "saved_items" in source_types
 
     # Build intro based on available sources
     sources_list = []
@@ -48,6 +52,8 @@ def _get_federated_template(source_types: List[str]) -> str:
         sources_list.append("AI conversation history")
     if has_books:
         sources_list.append("book library (EPUB/PDF)")
+    if has_saved:
+        sources_list.append("saved links and articles from various platforms")
     if has_web:
         sources_list.append("web search results")
 
@@ -64,6 +70,8 @@ def _get_federated_template(source_types: List[str]) -> str:
         notes.append("Some context may come from past AI conversations (marked with source_type: conversations).\nTreat these as reference material that may contain useful information.")
     if has_books:
         notes.append("Some context comes from books in the library (marked with source_type: books).\nBook sources include title and chapter information.")
+    if has_saved:
+        notes.append("Some context comes from saved links/articles (marked with source_type: saved_items).\nThese are curated saves — content may be summaries or excerpts, not full articles.")
     if has_web:
         notes.append("Some context comes from web search results (marked with source_type: web).\nWeb sources are marked with their URL for reference.")
 
@@ -101,11 +109,19 @@ FEDERATED_TEMPLATE = _get_federated_template(["vault", "conversations"])
 class IndexSource:
     """Represents a source index in the federation."""
     name: str
-    index: VectorStoreIndex
     source_type: Literal["vault", "conversations", "web", "saved_items", "books"]
+    index: Optional[VectorStoreIndex] = None
     weight: float = 1.0  # Score multiplier for this source
     nodes: Optional[List] = None  # For BM25 retriever
     wikilink_graph: Optional[Dict[str, List[str]]] = None
+    custom_retriever: Optional[BaseRetriever] = None  # For flat-schema sources (e.g. saved_items)
+    prebuilt_bm25: Optional[BaseRetriever] = None  # Pre-built BM25 retriever to reuse (avoids rebuild)
+
+    def __post_init__(self):
+        if self.index is None and self.custom_retriever is None:
+            raise ValueError(
+                f"IndexSource '{self.name}' must have either 'index' or 'custom_retriever'"
+            )
 
 
 class FederatedRetriever(BaseRetriever):
@@ -139,9 +155,9 @@ class FederatedRetriever(BaseRetriever):
         self.config = config
         self.query_transformer = query_transformer
         self.reranker = reranker
-        self.top_k_per_source = top_k_per_source or config.retrieval.top_k
-        # Use rerank_top_n for final limit (now 100+) to allow more sources
-        self.final_top_k = final_top_k or config.retrieval.rerank_top_n
+        self.top_k_per_source = top_k_per_source or config.retrieval.federated_top_k_per_source
+        self.final_top_k = final_top_k or config.retrieval.federated_final_top_k
+        self.max_chunks_per_document = config.retrieval.federated_max_chunks_per_document
         self.parallel = parallel
         self._book_filter = book_filter
 
@@ -154,6 +170,21 @@ class FederatedRetriever(BaseRetriever):
     def _build_retrievers(self):
         """Build retriever for each source."""
         for source in self.sources:
+            # Custom retriever path (e.g. saved_items with flat schema — no LlamaIndex index)
+            if source.custom_retriever is not None:
+                retriever = source.custom_retriever
+                # Still apply query transformation if configured
+                if self.query_transformer and self.config.retrieval.query_transform_method not in ["none", "disabled"]:
+                    retriever = QueryTransformRetriever(
+                        base_retriever=retriever,
+                        query_transformer=self.query_transformer,
+                        transform_method=self.config.retrieval.query_transform_method,
+                        num_queries=self.config.retrieval.query_transform_num_queries
+                    )
+                self.retrievers[source.name] = retriever
+                logger.info(f"Using custom retriever for source: {source.name} (type: {source.source_type})")
+                continue
+
             # For books with active filter: use filtered retriever, skip BM25
             if source.source_type == "books" and self._book_filter:
                 from books_retriever import get_books_retriever
@@ -174,15 +205,19 @@ class FederatedRetriever(BaseRetriever):
                 )
                 retriever = base_retriever
 
-                # Add BM25 fusion for hybrid search if nodes available
-                if BM25_AVAILABLE and source.nodes and self.config.retrieval.enable_hybrid_search:
+                # Add BM25 fusion for hybrid search — reuse prebuilt if available
+                if BM25_AVAILABLE and self.config.retrieval.enable_hybrid_search and (source.prebuilt_bm25 or source.nodes):
                     try:
                         from llama_index.core.retrievers import QueryFusionRetriever
 
-                        bm25_retriever = BM25Retriever.from_defaults(
-                            nodes=source.nodes,
-                            similarity_top_k=self.top_k_per_source
-                        )
+                        if source.prebuilt_bm25 is not None:
+                            bm25_retriever = source.prebuilt_bm25
+                            logger.info(f"Reusing prebuilt BM25 for source: {source.name}")
+                        else:
+                            bm25_retriever = BM25Retriever.from_defaults(
+                                nodes=source.nodes,
+                                similarity_top_k=self.top_k_per_source
+                            )
 
                         retriever = QueryFusionRetriever(
                             retrievers=[base_retriever, bm25_retriever],
@@ -278,27 +313,76 @@ class FederatedRetriever(BaseRetriever):
                 nodes = self._retrieve_from_source(source, query_bundle)
                 all_nodes.extend(nodes)
 
-        # Deduplicate by node_id (same chunk might exist in multiple indexes)
+        # Deduplicate by node_id and content signature (file_path + normalized text hash)
         seen_ids = set()
+        seen_content_keys = set()
         unique_nodes = []
         for node in all_nodes:
             node_id = node.node.node_id
             if node_id not in seen_ids:
+                content_key = self._content_dedupe_key(node)
+                if content_key and content_key in seen_content_keys:
+                    continue
                 seen_ids.add(node_id)
+                if content_key:
+                    seen_content_keys.add(content_key)
                 unique_nodes.append(node)
 
         # Sort by score descending
         unique_nodes.sort(key=lambda x: x.score or 0.0, reverse=True)
 
-        # Limit to final_top_k
-        result_nodes = unique_nodes[:self.final_top_k]
+        # Enforce source diversity by limiting chunks per document.
+        diversified_nodes: List[NodeWithScore] = []
+        per_doc_counts: dict[str, int] = defaultdict(int)
+        for node in unique_nodes:
+            doc_key = self._document_key(node)
+            if doc_key:
+                if per_doc_counts[doc_key] >= self.max_chunks_per_document:
+                    continue
+                per_doc_counts[doc_key] += 1
+            diversified_nodes.append(node)
+
+        # Limit to final_top_k after diversification
+        result_nodes = diversified_nodes[:self.final_top_k]
 
         logger.info(
             f"Federated retrieval: {len(all_nodes)} total -> "
-            f"{len(unique_nodes)} unique -> {len(result_nodes)} final"
+            f"{len(unique_nodes)} unique -> {len(diversified_nodes)} diversified -> {len(result_nodes)} final"
         )
 
         return result_nodes
+
+    @staticmethod
+    def _document_key(node_with_score: NodeWithScore) -> str:
+        """Stable document identity used for diversity constraints."""
+        node = node_with_score.node
+        md = node.metadata or {}
+        return (
+            md.get("file_path")
+            or md.get("doc_id")
+            or md.get("document_id")
+            or md.get("book_uid")
+            or node.node_id
+        )
+
+    @staticmethod
+    def _content_dedupe_key(node_with_score: NodeWithScore) -> str:
+        """Content-level dedupe key: file identity + normalized chunk hash."""
+        node = node_with_score.node
+        md = node.metadata or {}
+        file_path = (
+            md.get("file_path")
+            or md.get("doc_id")
+            or md.get("document_id")
+            or md.get("book_uid")
+            or "unknown"
+        )
+        text = (node.text or "").strip().lower()
+        text = re.sub(r"\s+", " ", text)
+        if not text:
+            return ""
+        text_hash = hashlib.sha1(text.encode("utf-8")).hexdigest()
+        return f"{file_path}:{text_hash}"
 
 
 class FederatedQueryEngine:

@@ -22,6 +22,7 @@ improve retrieval quality by bridging the query-document vocabulary gap:
 """
 
 import logging
+import threading
 from collections import OrderedDict
 from typing import List, Union, Optional, Tuple
 from llama_index.llms.google_genai import GoogleGenAI
@@ -155,6 +156,8 @@ class QueryExpansionCache:
 
 # Global cache instance (shared across QueryTransformer instances)
 _expansion_cache = QueryExpansionCache(max_size=100)
+_inflight_hyde_lock = threading.Lock()
+_inflight_hyde_events: dict[str, threading.Event] = {}
 
 
 def get_expansion_cache() -> QueryExpansionCache:
@@ -213,6 +216,26 @@ class QueryTransformer:
                 logger.info(f"HyDE cache hit - skipping LLM call")
                 return cached
 
+        # Prevent duplicate concurrent HyDE generations for the same query.
+        # In federated retrieval, multiple sources may call HyDE in parallel.
+        inflight_key = QueryExpansionCache.normalize_query(query)
+        is_owner = False
+        with _inflight_hyde_lock:
+            event = _inflight_hyde_events.get(inflight_key)
+            if event is None:
+                event = threading.Event()
+                _inflight_hyde_events[inflight_key] = event
+                is_owner = True
+
+        if not is_owner:
+            logger.debug("HyDE generation in-flight for query; waiting for cached result")
+            event.wait(timeout=30)
+            if self.enable_cache:
+                cached = self._cache.get("hyde", query)
+                if cached is not None:
+                    logger.info("HyDE cache hit after in-flight wait - reusing transformed query")
+                    return cached
+
         # Craft a prompt that generates a document-like response
         # Using thinking mode for better quality hypothetical documents
         prompt = f"""You are helping to search a personal knowledge base (Obsidian vault).
@@ -240,6 +263,12 @@ Write a comprehensive note passage (2-3 paragraphs) that would contain the answe
         except Exception as e:
             logger.warning(f"HyDE transformation failed: {e}. Falling back to original query.")
             return query
+        finally:
+            if is_owner:
+                with _inflight_hyde_lock:
+                    done_event = _inflight_hyde_events.pop(inflight_key, None)
+                    if done_event:
+                        done_event.set()
 
     def multi_query_expand(self, query: str, num_queries: int = 3) -> List[str]:
         """

@@ -199,12 +199,13 @@ class ConversationLoader:
         if not self.conversations_path.is_dir():
             raise NotADirectoryError(f"Not a directory: {self.conversations_path}")
 
-        # Find all markdown files (skip INDEX.md files)
+        # Find all markdown files (skip INDEX.md files and _excluded dirs)
         pattern = '**/*.md' if recursive else '*.md'
         md_files = [
             f for f in self.conversations_path.glob(pattern)
             if not f.name.upper().startswith('INDEX')
             and 'conversations' in str(f).lower()  # Only files in "conversations" subdirs
+            and '/_excluded/' not in str(f)
         ]
 
         logger.info(f"Found {len(md_files)} conversation files")
