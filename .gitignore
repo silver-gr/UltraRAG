@@ -57,9 +57,12 @@ temp/
 # Claude Code
 .claude/
 
-# SSL Certificates (symlink to shared certs)
-certs
-certs/
+# OMC (oh-my-claudecode state)
+.omc/
+
+# SSL certificates (keep directory, ignore key/cert material)
+certs/*
+!certs/.gitkeep
 
 # Gemini
 .gemini-clipboard/
