@@ -93,6 +93,32 @@ class SourceNumberingPostprocessor(BaseNodePostprocessor):
         return nodes
 
 
+class DocumentDiversityPostprocessor(BaseNodePostprocessor):
+    """Cap chunks per source document to promote result diversity.
+
+    Prevents a single long document from dominating all top-K results.
+    Insert after reranker, before SourceNumberingPostprocessor.
+    """
+
+    max_chunks_per_document: int = 5
+
+    def _postprocess_nodes(
+        self, nodes: List[NodeWithScore], query_bundle: Optional[QueryBundle] = None
+    ) -> List[NodeWithScore]:
+        doc_counts: Dict[str, int] = {}
+        filtered = []
+        for node_with_score in nodes:
+            # Use file_path as document identity
+            doc_id = node_with_score.node.metadata.get('file_path', node_with_score.node.node_id)
+            count = doc_counts.get(doc_id, 0)
+            if count < self.max_chunks_per_document:
+                filtered.append(node_with_score)
+                doc_counts[doc_id] = count + 1
+        if len(filtered) < len(nodes):
+            logger.info(f"DocumentDiversity: {len(nodes)} -> {len(filtered)} nodes (max {self.max_chunks_per_document}/doc)")
+        return filtered
+
+
 # Import additional dependencies for caching
 import hashlib
 from typing import Any
@@ -969,6 +995,15 @@ class HybridQueryEngine:
         else:
             logger.info("Reranker disabled (None)")
 
+        # Add document diversity postprocessor (MMR) if enabled
+        if self.config.retrieval.enable_mmr:
+            node_postprocessors.append(
+                DocumentDiversityPostprocessor(
+                    max_chunks_per_document=self.config.retrieval.max_chunks_per_document
+                )
+            )
+            logger.info(f"MMR diversity enabled: max {self.config.retrieval.max_chunks_per_document} chunks/doc")
+
         # Add similarity filter (disabled by default - reranker handles relevance)
         # LanceDB cosine similarity scores may not align with traditional 0-1 range
         if self.config.retrieval.similarity_threshold > 0 and not self.reranker:
@@ -1002,6 +1037,15 @@ class HybridQueryEngine:
             node_postprocessors=node_postprocessors
         )
 
+        # Setup Self-RAG response validator if enabled
+        if self.config.retrieval.validate_responses and self.config.retrieval.use_self_correction:
+            from self_correction import SelfRAGValidator
+            from llama_index.core import Settings
+            self._validator = SelfRAGValidator(Settings.llm)
+            logger.info("Self-RAG response validator enabled")
+        else:
+            self._validator = None
+
         return query_engine
 
     @trace_chain
@@ -1032,6 +1076,20 @@ class HybridQueryEngine:
         try:
             response = self.query_engine.query(query_str)
             logger.debug(f"Hybrid query completed successfully")
+
+            # Self-RAG response validation (post-generation hallucination check)
+            if self._validator and response.response and response.source_nodes:
+                context = "\n\n".join(
+                    n.node.text[:500] for n in response.source_nodes[:5]
+                )
+                is_valid, explanation = self._validator.validate_response(
+                    query_str, response.response, context
+                )
+                if not is_valid:
+                    logger.warning(f"Self-RAG validation flagged response: {explanation}")
+                    if not hasattr(response, 'metadata') or response.metadata is None:
+                        response.metadata = {}
+                    response.metadata['validation_warning'] = explanation
 
             # Store in cache if enabled
             if should_use_cache and self.query_cache is not None:

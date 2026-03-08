@@ -703,10 +703,30 @@ class ResearchRetriever:
                     logger.info("No sub-queries generated, stopping research")
                     break
 
-                # Use first sub-query for next iteration
-                # (in a more advanced implementation, could retrieve in parallel)
+                # Retrieve with ALL sub-queries and merge into the node pool
+                # (previously only used subqueries[0], wasting LLM-generated queries)
+                for sq_idx, sq in enumerate(subqueries[1:], 2):
+                    logger.info(f"Retrieving with sub-query {sq_idx}/{len(subqueries)}: {sq[:80]}...")
+                    sq_bundle = QueryBundle(query_str=sq)
+                    sq_nodes = self.base_retriever.retrieve(sq_bundle)
+                    logger.info(f"Sub-query {sq_idx} retrieved {len(sq_nodes)} nodes")
+
+                    for node in sq_nodes:
+                        node_id = node.node.node_id
+                        file_path = node.metadata.get('file_path')
+                        if node_id not in all_nodes:
+                            all_nodes[node_id] = node
+                        else:
+                            existing_score = all_nodes[node_id].score or 0
+                            new_score = node.score or 0
+                            if new_score > existing_score:
+                                all_nodes[node_id] = node
+                        if file_path:
+                            retrieved_paths.add(file_path)
+
+                # Use first sub-query as the primary query for next iteration's retrieval
                 current_query = subqueries[0]
-                logger.info(f"Next iteration query: {current_query}")
+                logger.info(f"Next iteration query: {current_query} (+ {len(subqueries)-1} sub-queries merged)")
             else:
                 logger.info("No gaps identified, stopping research")
                 break
