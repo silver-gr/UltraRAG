@@ -25,6 +25,80 @@ def _list_tables(db: Any) -> list[str]:
     return tables_resp.tables if hasattr(tables_resp, "tables") else tables_resp
 
 
+def _maybe_optimize_lancedb_index(db: Any, table_name: str, config: VectorDBConfig) -> None:
+    """Create or optimize LanceDB index with HNSW parameters and quantization.
+
+    Only runs on existing tables with sufficient rows. Safe to call on every load --
+    LanceDB will skip if an index already exists.
+    """
+    try:
+        existing_tables = _list_tables(db)
+        if table_name not in existing_tables:
+            return
+
+        table = db.open_table(table_name)
+        row_count = table.count_rows()
+
+        # Skip small tables (indexing overhead not worth it)
+        if row_count < 1000:
+            logger.debug(f"Skipping index optimization for {table_name} ({row_count} rows < 1000)")
+            return
+
+        # Check if index already exists by trying to list indices
+        try:
+            indices = table.list_indices()
+            if indices:
+                logger.debug(f"Index already exists on {table_name}, skipping creation")
+                return
+        except (AttributeError, Exception):
+            # list_indices may not be available in all LanceDB versions
+            pass
+
+        # Build index parameters
+        if config.enable_quantization and config.quantization_type == "pq":
+            # IVF_PQ: product quantization for memory reduction
+            num_partitions = min(256, max(1, row_count // 100))
+            num_sub_vectors = 96
+            logger.info(
+                f"Creating IVF_PQ index on {table_name}: "
+                f"partitions={num_partitions}, sub_vectors={num_sub_vectors}"
+            )
+            table.create_index(
+                metric="cosine",
+                index_type="IVF_PQ",
+                num_partitions=num_partitions,
+                num_sub_vectors=num_sub_vectors,
+            )
+        else:
+            # IVF_HNSW_SQ: HNSW with optional scalar quantization
+            num_partitions = min(256, max(1, row_count // 100))
+            logger.info(
+                f"Creating IVF_HNSW_SQ index on {table_name}: "
+                f"partitions={num_partitions}, "
+                f"m={config.hnsw_m}, ef_construction={config.hnsw_ef_construction}"
+            )
+            try:
+                table.create_index(
+                    metric="cosine",
+                    index_type="IVF_HNSW_SQ",
+                    num_partitions=num_partitions,
+                )
+            except (TypeError, ValueError):
+                # Fall back to basic IVF_FLAT if HNSW not supported
+                logger.info(f"IVF_HNSW_SQ not supported, falling back to IVF_FLAT")
+                table.create_index(
+                    metric="cosine",
+                    index_type="IVF_FLAT",
+                    num_partitions=num_partitions,
+                )
+
+        logger.info(f"LanceDB index created on {table_name} ({row_count} rows)")
+
+    except Exception as e:
+        # Index creation is optional optimization -- don't fail on errors
+        logger.debug(f"LanceDB index optimization skipped for {table_name}: {e}")
+
+
 def _get_index_hash(config: VectorDBConfig, table_name: str = "obsidian_embeddings") -> str:
     """Get hash of index to detect changes."""
     import lancedb
@@ -205,12 +279,17 @@ def get_vector_store(
                 logger.error(f"Failed to connect to LanceDB: {e}", exc_info=True)
                 raise RuntimeError(f"Failed to connect to LanceDB: {e}") from e
 
-            return LanceDBVectorStore(
+            vector_store = LanceDBVectorStore(
                 uri=str(config.lancedb_path),
                 table_name=table_name,
                 mode=mode,
                 flat_metadata=flat_metadata,
             )
+
+            # Optimize LanceDB index with HNSW/quantization if table exists
+            _maybe_optimize_lancedb_index(db, table_name, config)
+
+            return vector_store
 
         elif db_type == "qdrant":
             from llama_index.vector_stores.qdrant import QdrantVectorStore
