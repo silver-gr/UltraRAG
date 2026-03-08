@@ -1,174 +1,89 @@
-# UltraRAG Quick Start Guide
+# UltraRAG Quick Start
 
-## 🎯 Goal
-Get your Obsidian RAG system running in under 10 minutes.
+## Goal
+Get UltraRAG running with HTTPS (`:9001`) and authentication enabled.
 
-## 📋 Prerequisites
-- Python 3.10 or higher
-- Your Obsidian vault
-- At least one API key:
-  - **Recommended**: Voyage AI (for embeddings + reranking) + Google (for Gemini)
-  - **Free option**: Google API only (Gemini for both embeddings and LLM)
+## Prerequisites
+- Python 3.10+
+- OpenSSL (for local dev cert generation)
+- Obsidian vault path
+- API keys (Voyage + Google recommended)
 
-## 🚀 Installation (5 minutes)
+## 1) Setup
 
-### Step 1: Run setup script
 ```bash
 cd /Users/silver/Projects/UltraRAG
 chmod +x setup.sh
 ./setup.sh
 ```
 
-This will:
-- Create a virtual environment
-- Install all dependencies
-- Create a .env configuration file
+This script:
+- Creates/uses `/Users/silver/Projects/UltraRAG/venv`
+- Installs `requirements.txt`
+- Creates `.env` from `.env.example` if missing
 
-### Step 2: Configure your system
-Edit the `.env` file:
+## 2) Configure `.env`
+
+Set at minimum:
 
 ```bash
-# REQUIRED: Set your vault path
 OBSIDIAN_VAULT_PATH=/Users/your-name/Documents/ObsidianVault
-
-# REQUIRED: Add API keys
-VOYAGE_API_KEY=pa-xxx...  # Get from https://www.voyageai.com/
-GOOGLE_API_KEY=AIza...    # Get from https://makersuite.google.com/
-
-# OPTIONAL: Customize settings (defaults are optimized)
-EMBEDDING_MODEL=voyage-3.5-lite
-CHUNK_SIZE=512
-TOP_K=75
+VOYAGE_API_KEY=pa-...
+GOOGLE_API_KEY=AIza...
 ```
 
-### Step 3: Get API Keys (2 minutes)
+Auth and multi-user defaults are included:
 
-#### Voyage AI (Recommended for best quality)
-1. Go to https://www.voyageai.com/
-2. Sign up for free account
-3. Get API key from dashboard
-4. Free tier: 200M tokens/month (embeddings + reranking)
-
-#### Google AI Studio (Required for LLM)
-1. Go to https://makersuite.google.com/
-2. Sign in with Google account
-3. Create API key
-4. Free tier: Generous limits
-
-## 🎮 Usage
-
-### Option 1: Command Line Interface
 ```bash
-source venv/bin/activate
-python main.py
+ULTRARAG_AUTH_ENABLED=true
+ULTRARAG_USERS_PATH=data/auth/users.json
+ULTRARAG_SESSION_TIMEOUT_MINUTES=720
+ULTRARAG_MAX_CONCURRENT_JOBS=1
+ULTRARAG_MIN_SECONDS_BETWEEN_QUERIES=2
 ```
 
-Follow the prompts to:
-1. Index your vault (one-time, 10-30 minutes)
-2. Start querying your notes
+## 3) TLS certificates (required for default Streamlit config)
 
-### Option 2: Web Interface (Recommended)
+Expected files:
+- `/Users/silver/Projects/UltraRAG/certs/frontend.pem`
+- `/Users/silver/Projects/UltraRAG/certs/frontend-key.pem`
+
+Generate local self-signed certs:
+
+```bash
+./scripts/generate_dev_certs.sh
+```
+
+## 4) Bootstrap authentication
+
+Create the first admin user:
+
+```bash
+python -m scripts.manage_users init --admin silver
+```
+
+Optional additional user:
+
+```bash
+python -m scripts.manage_users add-user --username alice --role user
+```
+
+## 5) Start the app
+
 ```bash
 source venv/bin/activate
 streamlit run app.py
 ```
 
-This opens a web UI at http://localhost:8501
+Open:
+- `https://localhost:9001`
 
-## 💡 First Queries to Try
+## First run notes
+- Admin can initialize/index/reindex and access Settings/LLM Costs.
+- Non-admin users are query-only.
+- Query history and content-research exports are per-user under `data/users/<username>/`.
 
-Once indexed, try these queries:
-
-```
-What are my main areas of interest?
-```
-
-```
-Summarize my notes about [your favorite topic]
-```
-
-```
-What connections exist between [concept A] and [concept B]?
-```
-
-```
-Show me notes tagged with #important
-```
-
-## 🎛️ Configuration Options
-
-### Default Setup (Recommended)
-```bash
-# Best value with free tier (200M tokens/month)
-EMBEDDING_MODEL=voyage-3.5-lite
-VOYAGE_API_KEY=your_key
-GOOGLE_API_KEY=your_key
-```
-
-### Maximum Quality Setup
-```bash
-# Highest quality embeddings (paid)
-EMBEDDING_MODEL=voyage-3-large
-VOYAGE_API_KEY=your_key
-GOOGLE_API_KEY=your_key
-```
-
-### Self-Hosted Setup (No API costs)
-```bash
-# Requires GPU with 16-32GB VRAM
-EMBEDDING_MODEL=qwen3-8b
-GOOGLE_API_KEY=your_key  # Still needed for Gemini LLM
-```
-
-## 📊 What to Expect
-
-### Indexing
-- **Time**: 10-30 minutes for 1,650 notes
-- **Progress**: Shows progress bar
-- **One-time**: Only needed once, then incremental
-
-### Queries
-- **Simple queries**: <1 second
-- **Complex queries**: <3 seconds
-- **Quality**: 85-95% retrieval accuracy
-
-### Costs (with API models)
-- **Initial indexing**: $13-40 one-time
-- **Monthly usage**: $5-20 (moderate use)
-- **Per query**: $0.001-0.01
-
-## 🐛 Troubleshooting
-
-### "OBSIDIAN_VAULT_PATH not found"
-→ Edit `.env` and set the correct path to your vault
-
-### "API key not found"
-→ Make sure you added your keys to `.env` file
-
-### "Out of memory"
-→ Reduce `CHUNK_SIZE` in `.env` to 256
-
-### Slow indexing
-→ Normal for first time! 10-30 min is expected
-
-### Poor results
-→ Try adjusting `TOP_K` (increase to 100)
-→ Enable reranking (automatic with Voyage API key)
-
-## 📚 Next Steps
-
-1. **Try different queries** - Explore your knowledge base
-2. **Read the README.md** - Learn about advanced features
-3. **Customize settings** - Tune for your specific needs
-4. **Try Research Mode** - Use `@research <query>` for complex questions
-5. **Enable RAPTOR** - Hierarchical summaries for multi-document reasoning
-
-## 🆘 Need Help?
-
-- Check `README.md` for detailed documentation
-- Review `compass_artifact_*.md` for the full strategy
-- Common issues: See "Troubleshooting" in README.md
-
----
-
-**You're all set! Start exploring your knowledge base with AI-powered search.** 🎉
+## Troubleshooting
+- Missing cert files: run `./scripts/generate_dev_certs.sh`.
+- Login fails: run `python -m scripts.manage_users list-users` and reset password if needed.
+- `.env` missing keys: copy from `.env.example` and fill required values.
