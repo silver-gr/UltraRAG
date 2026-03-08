@@ -4,7 +4,8 @@ import re
 import time
 import json
 import uuid
-from urllib.parse import quote
+from html import escape
+from urllib.parse import quote, urlparse
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -19,9 +20,21 @@ from temporal_filter import get_all_presets, DateFilterPreset
 from settings_store import get_exclusions, add_exclusion, remove_exclusion
 from exclusion_matcher import ExclusionMatcher, preview_exclusions
 from llm_token_tracker import get_llm_tracker
+from auth import require_auth, is_admin, require_admin, logout
+from rate_limit import run_with_limits, QueryCooldownError, SystemBusyError
+from user_storage import user_query_history_path
+from ui_theme import inject_theme
 
 # Get Obsidian vault name from environment for clickable links
 OBSIDIAN_VAULT_NAME = os.getenv("OBSIDIAN_VAULT_NAME", "")
+
+# Source type icons used consistently across all source display locations
+SOURCE_ICONS = {
+    "vault": "📓",
+    "conversations": "💬",
+    "books": "📚",
+    "saved_items": "🔖",
+}
 
 
 def format_duration(seconds: float) -> str:
@@ -128,8 +141,8 @@ AUTOLOAD_INDEX = os.getenv("AUTOLOAD_INDEX", "true").lower() == "true"
 CURRENCY_EXCHANGE_RATE = float(os.getenv("CURRENCY_EXCHANGE_RATE", "0.8633"))  # 1 USD = X EUR
 VAT_RATE = float(os.getenv("VAT_RATE", "0.24"))  # VAT rate (0.24 = 24%)
 
-# Persistent query history file
-QUERY_HISTORY_FILE = Path("data/query_history.json")
+LEGACY_QUERY_HISTORY_FILE = Path("data/query_history.json")
+MIGRATED_QUERY_HISTORY_FILE = Path("data/query_history.migrated.json")
 
 # Cache invalidation file - touch this to force RAG reload
 CACHE_INVALIDATION_FILE = Path("data/.cache_invalid")
@@ -172,22 +185,23 @@ def get_cached_rag(_cache_key: int):
         return None, False
 
 
-def load_query_history() -> list:
+def load_query_history(username: str) -> list:
     """Load persistent query history from disk."""
-    if not QUERY_HISTORY_FILE.exists():
+    history_file = user_query_history_path(username)
+    if not history_file.exists():
         return []
     try:
-        with open(QUERY_HISTORY_FILE, 'r', encoding='utf-8') as f:
+        with open(history_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
             return data.get('queries', [])
     except (json.JSONDecodeError, IOError):
         return []
 
 
-def save_query_to_history(query: str, result: dict) -> None:
+def save_query_to_history(username: str, query: str, result: dict) -> None:
     """Append query + result to persistent history."""
     # Load existing history
-    history = load_query_history()
+    history = load_query_history(username)
 
     # Create new entry
     entry = {
@@ -205,11 +219,39 @@ def save_query_to_history(query: str, result: dict) -> None:
     # Append and save
     history.append(entry)
 
-    # Ensure data directory exists
-    QUERY_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    history_file = user_query_history_path(username)
+    history_file.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(QUERY_HISTORY_FILE, 'w', encoding='utf-8') as f:
+    with open(history_file, 'w', encoding='utf-8') as f:
         json.dump({'queries': history}, f, ensure_ascii=False, indent=2)
+
+
+def migrate_legacy_query_history(username: str, admin_user: bool) -> None:
+    """Migrate one-time global query history into admin's per-user history."""
+    if not admin_user or not LEGACY_QUERY_HISTORY_FILE.exists():
+        return
+
+    target_file = user_query_history_path(username)
+    if target_file.exists():
+        return
+
+    try:
+        data = json.loads(LEGACY_QUERY_HISTORY_FILE.read_text(encoding="utf-8"))
+        queries = data.get("queries", []) if isinstance(data, dict) else []
+        if queries:
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            target_file.write_text(
+                json.dumps({"queries": queries}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+        if MIGRATED_QUERY_HISTORY_FILE.exists():
+            LEGACY_QUERY_HISTORY_FILE.unlink()
+        else:
+            LEGACY_QUERY_HISTORY_FILE.rename(MIGRATED_QUERY_HISTORY_FILE)
+    except Exception:
+        # Keep legacy file untouched if migration fails.
+        return
 
 
 def clean_excerpt_for_display(text: str, max_chars: int = 1500) -> str:
@@ -353,24 +395,50 @@ def make_obsidian_link(file_path: str, vault_name: str = None) -> str:
     return f"obsidian://open?vault={encoded_vault}&file={encoded_file}"
 
 
-def render_file_link(file_path: str, source_type: str = "vault") -> str:
-    """Render file path as clickable Obsidian link if vault name is configured.
+def render_file_link(file_path: str, source_type: str = "vault", url: str = None, display_label: str = None) -> str:
+    """Render file path as clickable link appropriate to the source type.
 
     Args:
-        file_path: Path to the file
-        source_type: Type of source ("vault" or "conversations")
+        file_path: Path to the file (or item_id for saved_items)
+        source_type: Type of source ("vault", "conversations", "books", "saved_items")
+        url: External URL (for saved_items)
+        display_label: Human-readable label (e.g. domain for saved_items)
 
     Returns:
         HTML string with clickable link or plain text
     """
-    obsidian_url = make_obsidian_link(file_path) if source_type == "vault" else ""
+    file_path = str(file_path or "")
 
-    if obsidian_url:
-        # Clickable link that opens in Obsidian
-        return f'📁 <a href="{obsidian_url}" target="_blank" style="color: #1e90ff;">{file_path}</a> • {source_type.title()}'
+    def safe_external_url(raw_url: str) -> str:
+        """Only allow http/https URLs in rendered anchors."""
+        if not raw_url:
+            return ""
+        candidate = raw_url.strip()
+        parsed = urlparse(candidate)
+        if parsed.scheme not in {"http", "https"}:
+            return ""
+        return escape(candidate, quote=True)
+
+    if source_type == "vault":
+        obsidian_url = make_obsidian_link(file_path)
+        safe_file = escape(file_path)
+        if obsidian_url:
+            return f'📁 <a href="{obsidian_url}" target="_blank" style="color: #1e90ff;">{safe_file}</a> • Vault'
+        return f"📁 {safe_file} • Vault"
+    elif source_type == "saved_items":
+        label = display_label or file_path
+        safe_label = escape(str(label))
+        safe_url = safe_external_url(url)
+        if safe_url:
+            return f'🔗 <a href="{safe_url}" target="_blank" rel="noopener noreferrer" style="color: #1e90ff;">{safe_label}</a> • TheSource'
+        return f"🔗 {safe_label} • TheSource"
+    elif source_type == "books":
+        label = display_label or file_path
+        return f"📖 {escape(str(label))} • Books"
+    elif source_type == "conversations":
+        return f"💬 {escape(file_path)} • Conversations"
     else:
-        # Plain text fallback
-        return f"📁 {file_path} • {source_type.title()}"
+        return f"📁 {escape(file_path)} • {source_type.title()}"
 
 
 def render_stats_pills(cited_count: int, original_count: int, word_count: int,
@@ -428,9 +496,10 @@ def render_copy_buttons(clean_text: str, linked_text: str):
 # Page config
 st.set_page_config(
     page_title="UltraRAG - Obsidian Knowledge Assistant",
-    page_icon="40px.png",
+    page_icon="/app/static/favicon-32.png",
     layout="wide"
 )
+inject_theme()
 
 # Custom CSS for premium UI design
 st.markdown("""
@@ -1228,6 +1297,9 @@ components.html("""
     </script>
 """, height=0)
 
+CURRENT_AUTH_CTX = require_auth()
+migrate_legacy_query_history(CURRENT_AUTH_CTX.username, is_admin(CURRENT_AUTH_CTX))
+
 # Initialize session state
 if 'rag' not in st.session_state:
     st.session_state.rag = None
@@ -1261,8 +1333,9 @@ if AUTOLOAD_INDEX and st.session_state.rag is None:
 
 
 @st.dialog("⚙️ Settings", width="large")
-def settings_dialog():
+def settings_dialog(ctx):
     """Settings dialog for file exclusions and other configuration."""
+    require_admin(ctx)
     config = load_config()
     db_path = str(config.vector_db.lancedb_path)
     vault_path = config.vault_path
@@ -1338,7 +1411,8 @@ def settings_dialog():
                         file_paths = [
                             str(vault_path / p) for p, _ in preview["excluded_files"]
                         ]
-                        deleted = delete_from_index(db_path, file_paths)
+                        with run_with_limits(ctx, "delete_from_index"):
+                            deleted = delete_from_index(db_path, file_paths)
                         st.success(f"✅ Added exclusion. Removed {deleted} chunks from index.")
                     else:
                         st.success("✅ Added exclusion pattern.")
@@ -1388,8 +1462,9 @@ def settings_dialog():
 
 
 @st.dialog("LLM Token Usage & Costs", width="large")
-def llm_usage_dialog():
+def llm_usage_dialog(ctx):
     """Dialog showing daily LLM token usage and costs in EUR with VAT."""
+    require_admin(ctx)
     tracker = get_llm_tracker()
     stats = tracker.get_total_stats()
 
@@ -1492,7 +1567,8 @@ def llm_usage_dialog():
         col_yes, col_no = st.columns(2)
         with col_yes:
             if st.button("Yes, Reset", type="primary"):
-                tracker.reset_usage(confirm=True)
+                with run_with_limits(ctx, "reset_llm_usage"):
+                    tracker.reset_usage(confirm=True)
                 st.session_state.confirm_reset_llm_usage = False
                 st.success("Usage data reset!")
                 st.rerun()
@@ -1503,6 +1579,9 @@ def llm_usage_dialog():
 
 
 def main():
+    ctx = CURRENT_AUTH_CTX
+    admin_mode = is_admin(ctx)
+
     st.title("UltraRAG")
     st.markdown('<p class="hero-subtitle">Knowledge retrieval for your Obsidian vault</p>', unsafe_allow_html=True)
     
@@ -1518,6 +1597,11 @@ def main():
             unsafe_allow_html=True
         )
 
+        st.caption(f"Logged in as **{ctx.username}** ({ctx.role})")
+        if st.button("Logout", use_container_width=True):
+            logout()
+            st.rerun()
+
         # Check if .env exists
         if not Path(".env").exists():
             st.error("⚠️ .env file not found!")
@@ -1531,124 +1615,168 @@ def main():
         except Exception:
             has_existing_index = False
 
-        # Show appropriate buttons based on state
-        if not st.session_state.rag:
-            if has_existing_index:
-                st.success("📦 Existing index found!")
-                if st.button("🚀 Load Existing Index", type="primary"):
-                    with st.spinner("Loading RAG system and existing index..."):
-                        try:
-                            st.session_state.rag = UltraRAG()
-                            if st.session_state.rag.load_existing_index():
-                                st.session_state.indexed = True
-                                st.success("✅ Index loaded!")
-                                st.rerun()
-                            else:
-                                st.error("Failed to load index")
-                        except Exception as e:
-                            st.error(f"❌ Error: {e}")
-
-                if st.button("🔄 Create New Index"):
-                    with st.spinner("Initializing RAG system..."):
-                        try:
-                            st.session_state.rag = UltraRAG()
-                            st.success("✅ System initialized!")
-                        except Exception as e:
-                            st.error(f"❌ Error: {e}")
-            else:
-                if st.button("🚀 Initialize System", type="primary"):
-                    with st.spinner("Initializing RAG system..."):
-                        try:
-                            st.session_state.rag = UltraRAG()
-                            st.success("✅ System initialized!")
-                        except Exception as e:
-                            st.error(f"❌ Error: {e}")
-
-        # Index button (only show if initialized but not indexed)
-        if st.session_state.rag and not st.session_state.indexed:
-            if st.button("📚 Index Vault"):
-                with st.spinner("Indexing vault (this may take several minutes)..."):
-                    try:
-                        st.session_state.rag.index_vault()
-                        st.session_state.indexed = True
-                        st.success("✅ Vault indexed!")
-                        st.balloons()
-                    except Exception as e:
-                        st.error(f"❌ Error: {e}")
-        
-        # Conversations section
+        # Auto-load additional indexes for all users when already built.
         if st.session_state.rag and st.session_state.indexed:
-            st.divider()
-            st.subheader("AI Conversations")
-
-            # Check for conversations config
             config = st.session_state.rag.config
-            has_conv_path = config.conversations.path and config.conversations.path.exists()
             has_conv_index = st.session_state.rag.conversations_index_exists()
-
             if has_conv_index or st.session_state.conversations_indexed:
-                st.success("🟢 Conversations indexed")
                 st.session_state.conversations_indexed = True
-
-                # Load if not already
                 if st.session_state.rag.conversations_index is None:
                     st.session_state.rag.load_conversations_index()
                     st.session_state.rag._setup_federated_engine()
 
-            elif has_conv_path:
-                st.info(f"📁 Found: {config.conversations.path}")
-                if st.button("📚 Index Conversations"):
-                    with st.spinner("Indexing AI conversations..."):
-                        try:
-                            st.session_state.rag.index_conversations(force_reindex=False, interactive=False)
-                            st.session_state.conversations_indexed = True
-                            st.success("✅ Conversations indexed!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Error: {e}")
-            else:
-                st.info("Set CONVERSATIONS_PATH in .env")
+            if config.books.enabled and st.session_state.rag.books_index_exists():
+                if getattr(st.session_state.rag, "books_index", None) is None:
+                    st.session_state.rag.load_books_index()
+                    st.session_state.rag._setup_federated_engine()
 
-        # RAPTOR section
-        if st.session_state.rag and st.session_state.indexed:
-            st.divider()
-            st.subheader("RAPTOR Summaries")
+            if st.session_state.rag.raptor_index_exists() and st.session_state.rag.raptor_manager is None:
+                st.session_state.rag.load_raptor_index()
 
-            config = st.session_state.rag.config
-            has_raptor = st.session_state.rag.raptor_index_exists()
+        # Admin-only mutating controls
+        if admin_mode:
+            with st.expander("Admin", expanded=True):
+                # Show appropriate buttons based on state
+                if not st.session_state.rag:
+                    if has_existing_index:
+                        st.success("📦 Existing index found!")
+                        if st.button("🚀 Load Existing Index", type="primary"):
+                            with st.spinner("Loading RAG system and existing index..."):
+                                try:
+                                    with run_with_limits(ctx, "load_existing_index"):
+                                        st.session_state.rag = UltraRAG()
+                                        if st.session_state.rag.load_existing_index():
+                                            st.session_state.indexed = True
+                                            st.success("✅ Index loaded!")
+                                            st.rerun()
+                                        else:
+                                            st.error("Failed to load index")
+                                except SystemBusyError as e:
+                                    st.error(str(e))
+                                except Exception as e:
+                                    st.error(f"❌ Error: {e}")
 
-            if has_raptor:
-                st.success("🟢 RAPTOR index ready")
-                stats = st.session_state.rag.get_raptor_stats()
-                st.caption(f"Mode: {stats.get('default_mode', 'collapsed')} | Nodes: {stats.get('node_count', 'unknown')}")
+                        if st.button("🔄 Create New Index"):
+                            with st.spinner("Initializing RAG system..."):
+                                try:
+                                    with run_with_limits(ctx, "init_system"):
+                                        st.session_state.rag = UltraRAG()
+                                    st.success("✅ System initialized!")
+                                except SystemBusyError as e:
+                                    st.error(str(e))
+                                except Exception as e:
+                                    st.error(f"❌ Error: {e}")
+                    else:
+                        if st.button("🚀 Initialize System", type="primary"):
+                            with st.spinner("Initializing RAG system..."):
+                                try:
+                                    with run_with_limits(ctx, "init_system"):
+                                        st.session_state.rag = UltraRAG()
+                                    st.success("✅ System initialized!")
+                                except SystemBusyError as e:
+                                    st.error(str(e))
+                                except Exception as e:
+                                    st.error(f"❌ Error: {e}")
 
-                # Load if not already
-                if st.session_state.rag.raptor_manager is None:
-                    st.session_state.rag.load_raptor_index()
+                # Index button (only show if initialized but not indexed)
+                if st.session_state.rag and not st.session_state.indexed:
+                    if st.button("📚 Index Vault"):
+                        with st.spinner("Indexing vault (this may take several minutes)..."):
+                            try:
+                                with run_with_limits(ctx, "index_vault"):
+                                    st.session_state.rag.index_vault()
+                                st.session_state.indexed = True
+                                st.success("✅ Vault indexed!")
+                                st.balloons()
+                            except SystemBusyError as e:
+                                st.error(str(e))
+                            except Exception as e:
+                                st.error(f"❌ Error: {e}")
 
-            elif config.raptor.enabled:
-                st.info("RAPTOR enabled but not indexed")
-                if st.button("🌳 Build RAPTOR Index"):
-                    with st.spinner("Building RAPTOR hierarchical summaries (this may take several minutes)..."):
-                        try:
-                            st.session_state.rag.index_raptor(force_reindex=False, interactive=False)
-                            st.success("✅ RAPTOR index built!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Error: {e}")
-            else:
-                st.info("Set ENABLE_RAPTOR=true in .env")
+                # Conversations section
+                if st.session_state.rag and st.session_state.indexed:
+                    st.divider()
+                    st.subheader("AI Conversations")
 
-        # Settings button (shows exclusions and other configuration)
-        if st.session_state.indexed:
-            st.divider()
-            col_settings, col_usage = st.columns(2)
-            with col_settings:
-                if st.button("⚙️ Settings", use_container_width=True):
-                    settings_dialog()
-            with col_usage:
-                if st.button("💰 LLM Costs", use_container_width=True):
-                    llm_usage_dialog()
+                    config = st.session_state.rag.config
+                    has_conv_path = config.conversations.path and config.conversations.path.exists()
+                    has_conv_index = st.session_state.rag.conversations_index_exists()
+
+                    if has_conv_index or st.session_state.conversations_indexed:
+                        st.success("🟢 Conversations indexed")
+                        st.session_state.conversations_indexed = True
+
+                    elif has_conv_path:
+                        st.info(f"📁 Found: {config.conversations.path}")
+                        if st.button("📚 Index Conversations"):
+                            with st.spinner("Indexing AI conversations..."):
+                                try:
+                                    with run_with_limits(ctx, "index_conversations"):
+                                        st.session_state.rag.index_conversations(force_reindex=False, interactive=False)
+                                    st.session_state.conversations_indexed = True
+                                    st.success("✅ Conversations indexed!")
+                                    st.rerun()
+                                except SystemBusyError as e:
+                                    st.error(str(e))
+                                except Exception as e:
+                                    st.error(f"❌ Error: {e}")
+                    else:
+                        st.info("Set CONVERSATIONS_PATH in .env")
+
+                # Books section
+                if st.session_state.rag and st.session_state.indexed:
+                    config = st.session_state.rag.config
+                    if config.books.enabled:
+                        st.divider()
+                        st.subheader("Books")
+                        has_books_idx = st.session_state.rag.books_index_exists()
+                        books_in_mem = getattr(st.session_state.rag, 'books_index', None) is not None
+                        if has_books_idx:
+                            n_nodes = len(getattr(st.session_state.rag, 'books_nodes', None) or [])
+                            if books_in_mem:
+                                st.success(f"🟢 Books ready ({n_nodes:,} chunks)")
+                            else:
+                                st.info("📚 Books indexed — loaded on demand")
+                        else:
+                            st.info("Set BOOKS_PATH in .env and index books")
+
+                # RAPTOR section
+                if st.session_state.rag and st.session_state.indexed:
+                    st.divider()
+                    st.subheader("RAPTOR Summaries")
+
+                    config = st.session_state.rag.config
+                    has_raptor = st.session_state.rag.raptor_index_exists()
+
+                    if has_raptor:
+                        st.success("🟢 RAPTOR index ready")
+                        stats = st.session_state.rag.get_raptor_stats()
+                        st.caption(f"Mode: {stats.get('default_mode', 'collapsed')} | Nodes: {stats.get('node_count', 'unknown')}")
+                    elif config.raptor.enabled:
+                        st.info("RAPTOR enabled but not indexed")
+                        if st.button("🌳 Build RAPTOR Index"):
+                            with st.spinner("Building RAPTOR hierarchical summaries (this may take several minutes)..."):
+                                try:
+                                    with run_with_limits(ctx, "index_raptor"):
+                                        st.session_state.rag.index_raptor(force_reindex=False, interactive=False)
+                                    st.success("✅ RAPTOR index built!")
+                                    st.rerun()
+                                except SystemBusyError as e:
+                                    st.error(str(e))
+                                except Exception as e:
+                                    st.error(f"❌ Error: {e}")
+                    else:
+                        st.info("Set ENABLE_RAPTOR=true in .env")
+
+                if st.session_state.indexed:
+                    st.divider()
+                    col_settings, col_usage = st.columns(2)
+                    with col_settings:
+                        if st.button("⚙️ Settings", use_container_width=True):
+                            settings_dialog(ctx)
+                    with col_usage:
+                        if st.button("💰 LLM Costs", use_container_width=True):
+                            llm_usage_dialog(ctx)
 
         # System status (compact)
         st.divider()
@@ -1692,7 +1820,7 @@ def main():
         # Query history (persistent, clickable)
         st.divider()
         st.subheader("History")
-        persistent_history = load_query_history()
+        persistent_history = load_query_history(ctx.username)
         if persistent_history:
             # Show most recent 15 queries (reversed for newest first)
             for entry in reversed(persistent_history[-15:]):
@@ -1718,6 +1846,8 @@ def main():
     
     # Main content area
     if not st.session_state.indexed:
+        if not admin_mode:
+            st.warning("The knowledge index is not ready. Ask an admin to initialize/index the system.")
         st.markdown("""
         <div class="empty-state">
             <div class="empty-icon">&#x1F50D;</div>
@@ -1770,39 +1900,59 @@ def main():
             max_chars=10000  # Security: Limit query length
         )
 
-        # Search controls - Row 1: Button + Search type
+        # Search controls - Row 1: Button + Search type (conditionally shown)
         row1_col1, row1_col2 = st.columns([1, 4])
         with row1_col1:
             search_button = st.button("Search", type="primary", use_container_width=True)
-        with row1_col2:
-            search_type = st.radio(
-                "Search type:",
-                ["Full Answer", "Find Notes Only"],
-                horizontal=True,
-                label_visibility="collapsed"
-            )
 
-        # Search controls - Row 2: Scope + Options
+        # Search controls - Row 2: Source checkboxes + Options
         has_raptor = st.session_state.rag.raptor_index_exists() if st.session_state.rag else False
+        has_books = st.session_state.rag and getattr(st.session_state.rag, 'books_index', None) is not None
+        has_convos = st.session_state.conversations_indexed
+        has_saved = st.session_state.rag and getattr(st.session_state.rag, 'saved_items_retriever', None) is not None
 
-        if st.session_state.conversations_indexed:
-            # With conversations: Scope + Research + RAPTOR + Max sources
-            row2_col1, row2_col2, row2_col3, row2_col4 = st.columns([3, 1, 1, 1])
-            with row2_col1:
-                search_scope = st.radio(
-                    "Search scope:",
-                    ["📓 Vault", "💬 Convos", "🔀 Both"],
+        # Source checkboxes row — always shown
+        src_col1, src_col2, src_col3, src_col4, row2_col2, row2_col3, row2_col4 = st.columns([1, 1, 1, 1, 1, 1, 1])
+        with src_col1:
+            use_vault = st.checkbox("📓 Vault", value=True, key="src_vault")
+        with src_col2:
+            use_convos = st.checkbox("💬 Convos", value=has_convos, key="src_convos", disabled=not has_convos)
+        with src_col3:
+            use_books = st.checkbox("📚 Books", value=has_books, key="src_books", disabled=not has_books)
+        with src_col4:
+            use_saved = st.checkbox("🔖 Saved", value=has_saved, key="src_saved", disabled=not has_saved)
+
+        # Build source_filter — gate availability to prevent stale disabled-checkbox state
+        source_filter = []
+        if use_vault:
+            source_filter.append("vault")
+        if use_convos and has_convos:
+            source_filter.append("conversations")
+        if use_books and has_books:
+            source_filter.append("books")
+        if use_saved and has_saved:
+            source_filter.append("saved_items")
+
+        if not source_filter:
+            st.warning("⚠️ Select at least one source.")
+        has_selected_sources = bool(source_filter)
+
+        # "Find Notes Only" only makes sense for vault-only
+        vault_only = source_filter == ["vault"]
+        with row1_col2:
+            if vault_only:
+                search_type = st.radio(
+                    "Search type:",
+                    ["Full Answer", "Find Notes Only"],
                     horizontal=True,
-                    label_visibility="collapsed",
-                    index=2  # Default to "Both"
+                    label_visibility="collapsed"
                 )
-                # Map back to full names for consistency
-                scope_map = {"📓 Vault": "📓 Vault Only", "💬 Convos": "💬 Conversations", "🔀 Both": "🔀 Both"}
-                search_scope = scope_map.get(search_scope, search_scope)
-        else:
-            # Without conversations: Research + RAPTOR + Max sources
-            search_scope = "📓 Vault Only"
-            row2_col2, row2_col3, row2_col4 = st.columns([1, 1, 1])
+            else:
+                search_type = "Full Answer"
+                st.empty()
+
+        # search_scope kept for backwards-compat (history display key)
+        search_scope = "checkboxes"
 
         with row2_col2:
             research_mode = st.checkbox(
@@ -1926,26 +2076,29 @@ def main():
                 with st.expander("Gap Analysis Insights", expanded=False):
                     st.markdown(result['gap_analyses_markdown'])
 
-            # Federated source summary
-            if search_scope == "🔀 Both" and 'source_summary' in result:
-                summary = result.get('source_summary', {})
-                if summary:
-                    by_type = summary.get('by_type', {})
-                    vault_count = by_type.get('vault', 0)
-                    conv_count = by_type.get('conversations', 0)
-                    st.info(f"Sources: {vault_count} from vault, {conv_count} from conversations")
+            # Federated source summary (show whenever multi-source result available)
+            if 'source_summary' in result:
+                by_type = result['source_summary'].get('by_type', {})
+                parts = []
+                for stype, icon in [("vault", "📓"), ("conversations", "💬"), ("books", "📚"), ("saved_items", "🔖")]:
+                    count = by_type.get(stype, 0)
+                    if count:
+                        label = "saved" if stype == "saved_items" else stype
+                        parts.append(f"{icon} {count} {label}")
+                if parts:
+                    st.info(f"Sources: {', '.join(parts)}")
 
             # Sources section
             st.markdown(render_section_header("&#x1F4DA;", "Sources", str(cited_count), "icon-sources"), unsafe_allow_html=True)
             for source in filtered_sources:
                 source_type = source.get('source_type', 'vault')
-                type_icon = "📓" if source_type == 'vault' else "💬"
+                type_icon = SOURCE_ICONS.get(source_type, "📄")
                 # Anchor for clickable citation
                 st.markdown(f'<div id="source-{source["rank"]}"></div>', unsafe_allow_html=True)
                 with st.expander(
                     f"**{source['rank']}. {type_icon} {source['title']}** (score: {source.get('score', 0):.3f})"
                 ):
-                    file_link_html = render_file_link(source['file'], source_type)
+                    file_link_html = render_file_link(source['file'], source_type, url=source.get('url'), display_label=source.get('display_label'))
                     st.markdown(f'<small style="color: gray;">{file_link_html}</small>', unsafe_allow_html=True)
                     cleaned = clean_excerpt_for_display(source.get('excerpt', ''))
                     st.markdown(cleaned)
@@ -2006,12 +2159,12 @@ def main():
                     st.markdown(render_section_header("&#x1F4DA;", "Sources", str(cited_count), "icon-sources"), unsafe_allow_html=True)
                     for source in filtered_sources:
                         source_type = source.get('source_type', 'vault')
-                        type_icon = "📓" if source_type == 'vault' else "💬"
+                        type_icon = SOURCE_ICONS.get(source_type, "📄")
                         st.markdown(f'<div id="source-{source["rank"]}"></div>', unsafe_allow_html=True)
                         with st.expander(
                             f"**{source['rank']}. {type_icon} {source['title']}** (score: {source.get('score', 0):.3f})"
                         ):
-                            file_link_html = render_file_link(source['file'], source_type)
+                            file_link_html = render_file_link(source['file'], source_type, url=source.get('url'), display_label=source.get('display_label'))
                             st.markdown(f'<small style="color: gray;">{file_link_html}</small>', unsafe_allow_html=True)
                             cleaned = clean_excerpt_for_display(source.get('excerpt', ''))
                             st.markdown(cleaned)
@@ -2023,8 +2176,10 @@ def main():
             # Clear history view when starting new search
             st.session_state.loaded_history_result = None
 
-            # Validate non-empty query after stripping whitespace
-            if not query.strip():
+            # Validate source selection and query text
+            if not has_selected_sources:
+                st.error("Select at least one source before searching.")
+            elif not query.strip():
                 st.error("Please enter a valid query (non-empty).")
             elif len(query) > 10000:
                 st.error("Query is too long. Please limit to 10,000 characters.")
@@ -2045,129 +2200,140 @@ def main():
 
                 with st.spinner(spinner_message):
                     try:
-                        # Get current date filter from session state
-                        date_filter = st.session_state.date_filter
+                        with run_with_limits(ctx, "search_query"):
+                            # Get current date filter from session state
+                            date_filter = st.session_state.date_filter
 
-                        if search_type == "Full Answer":
-                            # Determine which query method to use
-                            # Note: We pass max_sources=None to get ALL sources for proper citation matching
-                            # The dropdown controls synthesis depth via retrieval config, not display limiting
-                            if raptor_mode:
-                                # RAPTOR mode uses hierarchical summaries
-                                result = st.session_state.rag.query_raptor(query, max_sources=None)
-                            elif research_mode:
-                                # Research mode uses ALL retrieved sources for synthesis
-                                result = st.session_state.rag.query_research(query, max_sources=None, date_filter=date_filter)
-                            elif search_scope == "📓 Vault Only":
-                                result = st.session_state.rag.query(query, max_sources=None, date_filter=date_filter)
-                            elif search_scope == "💬 Conversations":
-                                result = st.session_state.rag.query_conversations_only(query, max_sources=None, date_filter=date_filter)
-                            else:  # Both
-                                result = st.session_state.rag.query_federated(query, max_sources=None, date_filter=date_filter, book_filter=book_filter)
+                            if search_type == "Full Answer":
+                                # Determine which query method to use based on source checkboxes.
+                                # We pass max_sources=None to get ALL sources for proper citation matching.
+                                if raptor_mode:
+                                    # RAPTOR mode uses hierarchical summaries
+                                    result = st.session_state.rag.query_raptor(query, max_sources=None)
+                                elif research_mode:
+                                    # Research mode uses ALL retrieved sources for synthesis
+                                    result = st.session_state.rag.query_research(query, max_sources=None, date_filter=date_filter, source_filter=source_filter)
+                                elif source_filter == ["vault"]:
+                                    # Vault-only: use direct query engine (no federated overhead)
+                                    result = st.session_state.rag.query(query, max_sources=None, date_filter=date_filter)
+                                else:
+                                    # Multi-source: federated query with active source_filter
+                                    result = st.session_state.rag.query_federated(
+                                        query,
+                                        source_filter=source_filter,
+                                        max_sources=None,
+                                        date_filter=date_filter,
+                                        book_filter=book_filter,
+                                    )
 
-                            # Calculate execution time and stats
-                            exec_time = time.time() - start_time
-                            total_sources = len(result['sources'])
-                            word_count = len(result['answer'].split())
+                                # Calculate execution time and stats
+                                exec_time = time.time() - start_time
+                                word_count = len(result['answer'].split())
 
-                            # Calculate tokens used for this query
-                            tokens_after = llm_tracker.get_today_totals()
-                            tokens_used = (tokens_after[0] - tokens_before[0]) + (tokens_after[1] - tokens_before[1])
+                                # Calculate tokens used for this query
+                                tokens_after = llm_tracker.get_today_totals()
+                                tokens_used = (tokens_after[0] - tokens_before[0]) + (tokens_after[1] - tokens_before[1])
 
-                            # Save to persistent history
-                            save_query_to_history(query, result)
+                                # Save to persistent history
+                                save_query_to_history(ctx.username, query, result)
 
-                            # Store result for potential rerun and trigger sidebar update
-                            if not st.session_state.history_updated:
-                                st.session_state.pending_result = {
-                                    'result': result,
-                                    'query': query,
-                                    'exec_time': exec_time,
-                                    'search_scope': search_scope,
-                                    'research_mode': research_mode,
-                                    'tokens_used': tokens_used
+                                # Store result for potential rerun and trigger sidebar update
+                                if not st.session_state.history_updated:
+                                    st.session_state.pending_result = {
+                                        'result': result,
+                                        'query': query,
+                                        'exec_time': exec_time,
+                                        'search_scope': search_scope,
+                                        'research_mode': research_mode,
+                                        'tokens_used': tokens_used
+                                    }
+                                    st.session_state.history_updated = True
+                                    st.rerun()  # Rerun to update sidebar with new history
+
+                                # Reset flag for next query
+                                st.session_state.history_updated = False
+
+                                # Filter to cited sources only and renumber citations sequentially
+                                original_source_count = len(result['sources'])
+                                remapped_answer, filtered_sources = filter_and_renumber_citations(
+                                    result['answer'], result['sources']
+                                )
+                                cited_count = len(filtered_sources)
+
+                                # Stats pills
+                                time_str = format_duration(exec_time)
+                                st.markdown(render_stats_pills(
+                                    cited_count, original_source_count, word_count, time_str,
+                                    tokens_used, research_mode
+                                ), unsafe_allow_html=True)
+
+                                # Answer section
+                                st.markdown(render_section_header("&#x1F4DD;", "Answer", icon_class="icon-answer"), unsafe_allow_html=True)
+                                answer_with_links = linkify_citations(remapped_answer)
+                                st.markdown(f'<div class="answer-card">{answer_with_links}</div>', unsafe_allow_html=True)
+
+                                # Copy buttons
+                                source_map = {
+                                    source['rank']: source['title']
+                                    for source in filtered_sources
                                 }
-                                st.session_state.history_updated = True
-                                st.rerun()  # Rerun to update sidebar with new history
+                                clean_text = strip_citations(remapped_answer)
+                                linked_text = format_with_wikilink_footnotes(remapped_answer, source_map)
+                                render_copy_buttons(clean_text, linked_text)
 
-                            # Reset flag for next query
-                            st.session_state.history_updated = False
+                                # Research details
+                                if research_mode and 'research_summary' in result:
+                                    with st.expander("Research Details", expanded=False):
+                                        st.text(result['research_summary'])
 
-                            # Filter to cited sources only and renumber citations sequentially
-                            original_source_count = len(result['sources'])
-                            remapped_answer, filtered_sources = filter_and_renumber_citations(
-                                result['answer'], result['sources']
-                            )
-                            cited_count = len(filtered_sources)
+                                if research_mode and result.get('gap_analyses_markdown'):
+                                    with st.expander("Gap Analysis Insights", expanded=False):
+                                        st.markdown(result['gap_analyses_markdown'])
 
-                            # Stats pills
-                            time_str = format_duration(exec_time)
-                            st.markdown(render_stats_pills(
-                                cited_count, original_source_count, word_count, time_str,
-                                tokens_used, research_mode
-                            ), unsafe_allow_html=True)
+                                # Federated source summary (show whenever multi-source result available)
+                                if 'source_summary' in result:
+                                    by_type = result['source_summary'].get('by_type', {})
+                                    parts = []
+                                    for stype, icon in [("vault", "📓"), ("conversations", "💬"), ("books", "📚"), ("saved_items", "🔖")]:
+                                        count = by_type.get(stype, 0)
+                                        if count:
+                                            label = "saved" if stype == "saved_items" else stype
+                                            parts.append(f"{icon} {count} {label}")
+                                    if parts:
+                                        st.info(f"Sources: {', '.join(parts)}")
 
-                            # Answer section
-                            st.markdown(render_section_header("&#x1F4DD;", "Answer", icon_class="icon-answer"), unsafe_allow_html=True)
-                            answer_with_links = linkify_citations(remapped_answer)
-                            st.markdown(f'<div class="answer-card">{answer_with_links}</div>', unsafe_allow_html=True)
+                                # Sources section
+                                st.markdown(render_section_header("&#x1F4DA;", "Sources", str(cited_count), "icon-sources"), unsafe_allow_html=True)
+                                for source in filtered_sources:
+                                    source_type = source.get('source_type', 'vault')
+                                    type_icon = SOURCE_ICONS.get(source_type, "📄")
+                                    st.markdown(f'<div id="source-{source["rank"]}"></div>', unsafe_allow_html=True)
+                                    with st.expander(
+                                        f"**{source['rank']}. {type_icon} {source['title']}** — {source['score']:.3f}"
+                                    ):
+                                        file_link_html = render_file_link(source['file'], source_type, url=source.get('url'), display_label=source.get('display_label'))
+                                        st.markdown(f'<small style="color: #64748b;">{file_link_html}</small>', unsafe_allow_html=True)
+                                        cleaned = clean_excerpt_for_display(source['excerpt'])
+                                        st.markdown(cleaned)
+                            else:
+                                # Just retrieve relevant notes
+                                notes = st.session_state.rag.search_notes(query, top_k=max_sources, date_filter=date_filter)
 
-                            # Copy buttons
-                            source_map = {
-                                source['rank']: source['title']
-                                for source in filtered_sources
-                            }
-                            clean_text = strip_citations(remapped_answer)
-                            linked_text = format_with_wikilink_footnotes(remapped_answer, source_map)
-                            render_copy_buttons(clean_text, linked_text)
+                                st.markdown(render_section_header("&#x1F4DA;", "Relevant Notes", str(len(notes)), "icon-sources"), unsafe_allow_html=True)
+                                for note in notes:
+                                    source_type = note.get('source_type', 'vault')
+                                    with st.expander(
+                                        f"**{note['rank']}. {note['title']}** — {note['score']:.3f}"
+                                    ):
+                                        file_link_html = render_file_link(note['file'], source_type, url=note.get('url'), display_label=note.get('display_label'))
+                                        st.markdown(f'<small style="color: #64748b;">{file_link_html}</small>', unsafe_allow_html=True)
+                                        cleaned = clean_excerpt_for_display(note['excerpt'])
+                                        st.markdown(cleaned)
 
-                            # Research details
-                            if research_mode and 'research_summary' in result:
-                                with st.expander("Research Details", expanded=False):
-                                    st.text(result['research_summary'])
-
-                            if research_mode and result.get('gap_analyses_markdown'):
-                                with st.expander("Gap Analysis Insights", expanded=False):
-                                    st.markdown(result['gap_analyses_markdown'])
-
-                            # Federated source summary
-                            if search_scope == "🔀 Both" and 'source_summary' in result:
-                                summary = result.get('source_summary', {})
-                                if summary:
-                                    by_type = summary.get('by_type', {})
-                                    vault_count = by_type.get('vault', 0)
-                                    conv_count = by_type.get('conversations', 0)
-                                    st.info(f"Sources: {vault_count} from vault, {conv_count} from conversations")
-
-                            # Sources section
-                            st.markdown(render_section_header("&#x1F4DA;", "Sources", str(cited_count), "icon-sources"), unsafe_allow_html=True)
-                            for source in filtered_sources:
-                                source_type = source.get('source_type', 'vault')
-                                type_icon = "&#x1F4D3;" if source_type == 'vault' else "&#x1F4AC;"
-                                st.markdown(f'<div id="source-{source["rank"]}"></div>', unsafe_allow_html=True)
-                                with st.expander(
-                                    f"**{source['rank']}. {source['title']}** — {source['score']:.3f}"
-                                ):
-                                    file_link_html = render_file_link(source['file'], source_type)
-                                    st.markdown(f'<small style="color: #64748b;">{file_link_html}</small>', unsafe_allow_html=True)
-                                    cleaned = clean_excerpt_for_display(source['excerpt'])
-                                    st.markdown(cleaned)
-
-                        else:
-                            # Just retrieve relevant notes
-                            notes = st.session_state.rag.search_notes(query, top_k=max_sources, date_filter=date_filter)
-
-                            st.markdown(render_section_header("&#x1F4DA;", "Relevant Notes", str(len(notes)), "icon-sources"), unsafe_allow_html=True)
-                            for note in notes:
-                                source_type = note.get('source_type', 'vault')
-                                with st.expander(
-                                    f"**{note['rank']}. {note['title']}** — {note['score']:.3f}"
-                                ):
-                                    file_link_html = render_file_link(note['file'], source_type)
-                                    st.markdown(f'<small style="color: #64748b;">{file_link_html}</small>', unsafe_allow_html=True)
-                                    cleaned = clean_excerpt_for_display(note['excerpt'])
-                                    st.markdown(cleaned)
-
+                    except QueryCooldownError as e:
+                        st.warning(str(e))
+                    except SystemBusyError as e:
+                        st.error(str(e))
                     except Exception as e:
                         st.error(f"❌ Error: {e}")
         

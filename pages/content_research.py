@@ -1,11 +1,16 @@
-"""Content Research — Multi-source federated search with configurable weights."""
+"""Content Research — multi-source federated search with per-user storage."""
+
+from __future__ import annotations
+
 import streamlit as st
 
+from auth import require_auth, logout
 from content_research_engine import (
     ResearchResult,
     weighted_federated_search,
     deduplicate_results,
 )
+from rate_limit import run_with_limits, QueryCooldownError, SystemBusyError
 from research_storage import (
     save_results,
     load_results,
@@ -13,226 +18,61 @@ from research_storage import (
     clear_history,
     export_markdown,
     export_json,
-    EXPORTS_DIR,
+    get_exports_dir,
 )
+from ui_theme import inject_theme
 
-st.set_page_config(page_title="Content Research", layout="wide")
-
-# Shared design system (synced with main app.py)
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
-
-:root {
-    --brand: #667eea;
-    --brand-light: #818cf8;
-    --brand-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    --accent: #10B981;
-    --bg-base: #020617;
-    --bg-surface: #0f172a;
-    --bg-glass: rgba(255, 255, 255, 0.03);
-    --bg-glass-hover: rgba(255, 255, 255, 0.06);
-    --border-subtle: rgba(255, 255, 255, 0.06);
-    --border-default: rgba(255, 255, 255, 0.1);
-    --border-hover: rgba(102, 126, 234, 0.3);
-    --text-primary: #f8fafc;
-    --text-secondary: #94a3b8;
-    --text-muted: #64748b;
-    --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
-    --shadow-md: 0 4px 16px rgba(0,0,0,0.35);
-    --shadow-glow: 0 0 24px rgba(102, 126, 234, 0.12);
-    --radius-sm: 6px;
-    --radius-md: 10px;
-    --radius-lg: 14px;
-    --ease: cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.stApp {
-    background: linear-gradient(160deg, #020617 0%, #0f172a 40%, #0c1222 100%) !important;
-    font-family: 'Inter', -apple-system, sans-serif !important;
-}
-
-.main .block-container { padding-top: 1.5rem !important; max-width: 1200px !important; }
-
-h1, h2, h3, h4, h5, h6, p, label, button, input, textarea, select, a,
-.stMarkdown, [data-testid="stTextInput"], [data-testid="stTextArea"],
-[data-testid="stSelectbox"], [data-testid="stRadio"],
-[data-testid="stCheckbox"], [data-testid="stMetric"],
-[data-testid="stAlert"], [data-testid="stCaption"],
-[data-testid="stExpander"] summary > span {
-    font-family: 'Inter', -apple-system, sans-serif !important;
-}
-code, pre { font-family: 'JetBrains Mono', monospace !important; }
-
-.main h1 {
-    background: var(--brand-gradient);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    font-weight: 700 !important;
-    letter-spacing: -0.02em !important;
-}
-h2, h3 { color: var(--text-primary) !important; font-weight: 600 !important; }
-.stMarkdown p { color: var(--text-secondary) !important; line-height: 1.65 !important; }
-
-[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0f172a 0%, #0a0f1e 100%) !important;
-    border-right: 1px solid var(--border-subtle) !important;
-}
-.stSidebar h1, .stSidebar h2, .stSidebar h3 {
-    color: var(--text-secondary) !important;
-    font-size: 0.7rem !important;
-    letter-spacing: 0.1em !important;
-    text-transform: uppercase !important;
-    font-weight: 600 !important;
-}
-.stSidebar hr { border-color: var(--border-subtle) !important; margin: 0.75rem 0 !important; }
-
-[data-testid="stExpander"] {
-    background: var(--bg-glass) !important;
-    border: 1px solid var(--border-default) !important;
-    border-radius: var(--radius-lg) !important;
-    backdrop-filter: blur(12px) !important;
-    box-shadow: var(--shadow-sm) !important;
-    transition: all 250ms var(--ease) !important;
-}
-[data-testid="stExpander"]:hover {
-    border-color: var(--border-hover) !important;
-    box-shadow: var(--shadow-md), var(--shadow-glow) !important;
-}
-
-button[kind="primary"] {
-    background: var(--brand-gradient) !important;
-    border: none !important;
-    border-radius: var(--radius-md) !important;
-    color: white !important;
-    font-weight: 600 !important;
-    transition: all 250ms var(--ease) !important;
-    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3) !important;
-}
-button[kind="primary"]:hover { transform: translateY(-1px) !important; }
-
-button[kind="secondary"] {
-    background: var(--bg-glass) !important;
-    border: 1px solid var(--border-default) !important;
-    border-radius: var(--radius-md) !important;
-    color: var(--text-primary) !important;
-    transition: all 250ms var(--ease) !important;
-}
-button[kind="secondary"]:hover { background: var(--bg-glass-hover) !important; border-color: var(--border-hover) !important; }
-
-[data-testid="stTextInput"] input, [data-testid="stNumberInput"] input {
-    background: var(--bg-glass) !important;
-    border: 1px solid var(--border-default) !important;
-    border-radius: var(--radius-md) !important;
-    color: var(--text-primary) !important;
-    font-family: 'Inter', sans-serif !important;
-    transition: all 250ms var(--ease) !important;
-}
-[data-testid="stTextInput"] input:focus {
-    border-color: var(--brand) !important;
-    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15) !important;
-}
-[data-testid="stTextInput"] input::placeholder { color: var(--text-muted) !important; }
-
-[data-testid="stSlider"] > div > div > div { background: var(--brand-gradient) !important; }
-div[data-testid="stCheckbox"] label { color: var(--text-secondary) !important; }
-
-[data-testid="stAlert"] {
-    background: var(--bg-glass) !important;
-    border: 1px solid var(--border-default) !important;
-    border-radius: var(--radius-lg) !important;
-}
-[data-testid="stMetric"] {
-    background: var(--bg-glass) !important;
-    border: 1px solid var(--border-default) !important;
-    border-radius: var(--radius-lg) !important;
-    padding: 1rem !important;
-}
-[data-testid="stMetric"] label { color: var(--text-muted) !important; text-transform: uppercase !important; letter-spacing: 0.08em !important; font-size: 0.7rem !important; }
-[data-testid="stMetric"] [data-testid="stMetricValue"] {
-    background: var(--brand-gradient);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    font-weight: 700 !important;
-    font-family: 'JetBrains Mono', monospace !important;
-}
-
-[data-testid="stTabs"] button { background: transparent !important; border: none !important; border-bottom: 2px solid transparent !important; color: var(--text-muted) !important; font-weight: 500 !important; }
-[data-testid="stTabs"] button:hover { color: var(--text-secondary) !important; }
-[data-testid="stTabs"] button[aria-selected="true"] { color: var(--text-primary) !important; border-bottom-color: var(--brand) !important; }
-
-[data-testid="stDataFrame"] { background: var(--bg-glass) !important; border: 1px solid var(--border-default) !important; border-radius: var(--radius-lg) !important; }
-
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.2); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.35); }
-
-a { color: var(--brand-light) !important; text-decoration: none !important; }
-a:hover { color: #34D399 !important; }
-hr { border: none !important; height: 1px !important; background: var(--border-subtle) !important; margin: 1.25rem 0 !important; }
-
-@keyframes fadeInUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-[data-testid="stExpander"], [data-testid="stAlert"], [data-testid="stMetric"] { animation: fadeInUp 0.35s var(--ease) both; }
-
-@media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
-}
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(
+    page_title="Content Research",
+    page_icon="/app/static/favicon-32.png",
+    layout="wide",
+)
+inject_theme()
+ctx = require_auth()
 
 st.title("Content Research")
 st.caption("Federated search across Vault, AI Conversations, and The Source")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Sidebar: Source Configuration
-# ──────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
+    st.caption(f"Logged in as: **{ctx.username}** ({ctx.role})")
+    if st.button("Logout", use_container_width=True):
+        logout()
+        st.rerun()
+
+    st.divider()
     st.subheader("Source Configuration")
 
     vault_enabled = st.checkbox("Vault", value=True)
-    vault_weight = st.slider("Vault Weight", 0.0, 2.0, 1.0, 0.1,
-                             disabled=not vault_enabled)
+    vault_weight = st.slider("Vault Weight", 0.0, 2.0, 1.0, 0.1, disabled=not vault_enabled)
 
     conv_enabled = st.checkbox("Conversations", value=True)
-    conv_weight = st.slider("Conversations Weight", 0.0, 2.0, 0.7, 0.1,
-                            disabled=not conv_enabled)
+    conv_weight = st.slider("Conversations Weight", 0.0, 2.0, 0.7, 0.1, disabled=not conv_enabled)
 
     source_enabled = st.checkbox("The Source", value=True)
-    source_weight = st.slider("The Source Weight", 0.0, 2.0, 0.5, 0.1,
-                              disabled=not source_enabled)
+    source_weight = st.slider("The Source Weight", 0.0, 2.0, 0.5, 0.1, disabled=not source_enabled)
 
     st.divider()
     st.subheader("Retrieval Settings")
-    top_k = st.number_input("Top-K per source", min_value=5, max_value=100,
-                            value=30, step=5)
+    top_k = st.number_input("Top-K per source", min_value=5, max_value=100, value=30, step=5)
     threshold = st.slider("Score Threshold", 0.0, 1.0, 0.4, 0.05)
     dedup_sim = st.slider("Dedup Similarity", 0.5, 1.0, 0.85, 0.05)
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Sidebar: Query History
-    # ──────────────────────────────────────────────────────────────────────────
     st.divider()
     st.subheader("Query History")
-    history = get_history()
+    history = get_history(ctx.username)
 
     if history:
         for entry in history[:20]:
             label = entry["query"][:30]
             if len(entry["query"]) > 30:
                 label += "..."
-            sublabel = (
-                f"{entry['timestamp'][:10]} | "
-                f"{entry['stats']['total_results']} results"
-            )
+            sublabel = f"{entry['timestamp'][:10]} | {entry['stats']['total_results']} results"
             if st.button(label, key=f"hist_{entry['id']}", help=sublabel):
-                stored = load_results(entry["id"])
+                stored = load_results(entry["id"], username=ctx.username)
                 if stored:
-                    # Reconstruct ResearchResult objects from stored dicts
                     st.session_state.results = [
-                        ResearchResult(**{k: v for k, v in r.items()
-                                         if k != "embedding"})
-                        for r in stored["results"]
+                        ResearchResult(**{k: v for k, v in result.items() if k != "embedding"})
+                        for result in stored["results"]
                     ]
                     st.session_state.dedup_log = stored.get("dedup_log", [])
                     st.session_state.query_settings = stored["settings"]
@@ -240,19 +80,15 @@ with st.sidebar:
                     st.rerun()
 
         if st.button("Clear History", type="secondary"):
-            clear_history()
+            clear_history(ctx.username)
             st.rerun()
     else:
         st.caption("No queries yet.")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Main: Query Input
-# ──────────────────────────────────────────────────────────────────────────────
 query = st.text_input("Topic", placeholder="e.g. ADHD tips and tricks")
 
 if st.button("Search", type="primary") and query:
-    # Build weights from enabled sources
-    weights = {}
+    weights: dict[str, float] = {}
     if vault_enabled:
         weights["vault"] = vault_weight
     if conv_enabled:
@@ -263,52 +99,49 @@ if st.button("Search", type="primary") and query:
     if not weights:
         st.error("Enable at least one source.")
     else:
-        with st.spinner("Searching across sources..."):
-            results = weighted_federated_search(
-                query=query,
-                weights=weights,
-                top_k=top_k,
-                threshold=threshold,
-            )
+        try:
+            with run_with_limits(ctx, "content_research_search"):
+                with st.spinner("Searching across sources..."):
+                    results = weighted_federated_search(
+                        query=query,
+                        weights=weights,
+                        top_k=top_k,
+                        threshold=threshold,
+                    )
 
-        with st.spinner("Deduplicating..."):
-            results, dedup_log = deduplicate_results(results, dedup_sim)
+                with st.spinner("Deduplicating..."):
+                    results, dedup_log = deduplicate_results(results, dedup_sim)
 
-        # Store query settings
-        query_settings = {
-            "query": query,
-            "weights": weights,
-            "top_k": top_k,
-            "threshold": threshold,
-            "dedup_similarity": dedup_sim,
-        }
+                query_settings = {
+                    "query": query,
+                    "weights": weights,
+                    "top_k": top_k,
+                    "threshold": threshold,
+                    "dedup_similarity": dedup_sim,
+                }
 
-        # Save internally
-        result_id = save_results(query_settings, results, dedup_log)
+                result_id = save_results(query_settings, results, dedup_log, username=ctx.username)
 
-        # Session state
-        st.session_state.results = results
-        st.session_state.dedup_log = dedup_log
-        st.session_state.query_settings = query_settings
-        st.session_state.result_id = result_id
+            st.session_state.results = results
+            st.session_state.dedup_log = dedup_log
+            st.session_state.query_settings = query_settings
+            st.session_state.result_id = result_id
+            st.rerun()
+        except QueryCooldownError as exc:
+            st.warning(str(exc))
+        except SystemBusyError as exc:
+            st.error(str(exc))
 
-        st.rerun()
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Results Display
-# ──────────────────────────────────────────────────────────────────────────────
 if "results" in st.session_state and st.session_state.results:
     results = st.session_state.results
     dedup_log = st.session_state.get("dedup_log", [])
     query_settings = st.session_state.get("query_settings", {})
 
-    # Stats bar
-    sources_present = sorted(set(r.source if hasattr(r, 'source')
-                                 else r.get("source", "?") for r in results))
-    source_counts = {}
-    for r in results:
-        src = r.source if hasattr(r, 'source') else r.get("source", "?")
-        source_counts[src] = source_counts.get(src, 0) + 1
+    sources_present = sorted(set(r.source if hasattr(r, "source") else r.get("source", "?") for r in results))
+    source_counts: dict[str, int] = {}
+    for result in results:
+        source = result.source if hasattr(result, "source") else result.get("source", "?")
+        source_counts[source] = source_counts.get(source, 0) + 1
 
     cols = st.columns([2, 1, 1, 1])
     with cols[0]:
@@ -316,125 +149,119 @@ if "results" in st.session_state and st.session_state.results:
     with cols[1]:
         if dedup_log:
             st.caption(f"{len(dedup_log)} duplicates removed")
-    with cols[2]:
-        pass
-    with cols[3]:
-        pass
 
-    # Export buttons
     exp_col1, exp_col2, exp_col3 = st.columns([1, 1, 2])
     with exp_col1:
         if st.button("Export Markdown"):
-            path = export_markdown(st.session_state.result_id)
-            if path:
-                st.success(f"Saved: {path.name}")
-            else:
-                st.error("Export failed")
+            try:
+                with run_with_limits(ctx, "export_markdown"):
+                    path = export_markdown(st.session_state.result_id, username=ctx.username)
+                if path:
+                    st.success(f"Saved: {path.name}")
+                else:
+                    st.error("Export failed")
+            except QueryCooldownError as exc:
+                st.warning(str(exc))
+            except SystemBusyError as exc:
+                st.error(str(exc))
     with exp_col2:
         if st.button("Export JSON"):
-            path = export_json(st.session_state.result_id)
-            if path:
-                st.success(f"Saved: {path.name}")
-            else:
-                st.error("Export failed")
+            try:
+                with run_with_limits(ctx, "export_json"):
+                    path = export_json(st.session_state.result_id, username=ctx.username)
+                if path:
+                    st.success(f"Saved: {path.name}")
+                else:
+                    st.error("Export failed")
+            except QueryCooldownError as exc:
+                st.warning(str(exc))
+            except SystemBusyError as exc:
+                st.error(str(exc))
     with exp_col3:
-        st.caption(f"Export dir: `{EXPORTS_DIR}`")
+        st.caption(f"Export dir: `{get_exports_dir(ctx.username)}`")
 
     st.divider()
 
-    # Tabbed results
     source_labels = {
         "vault": "Vault",
         "conversations": "Conversations",
         "saved_items": "The Source",
     }
-    tab_names = ["All"] + [
-        f"{source_labels.get(s, s)} ({source_counts.get(s, 0)})"
-        for s in sources_present
-    ]
+    tab_names = ["All"] + [f"{source_labels.get(source, source)} ({source_counts.get(source, 0)})" for source in sources_present]
     tabs = st.tabs(tab_names)
 
-    def _display_result(r):
-        """Display a single research result in an expander."""
-        if hasattr(r, 'source'):
-            title = r.title
-            score = r.weighted_score
-            raw = r.raw_score
-            source = r.source
-            chunk = r.chunk
-            metadata = r.metadata
+    def _display_result(result_obj):
+        if hasattr(result_obj, "source"):
+            title = result_obj.title
+            score = result_obj.weighted_score
+            raw = result_obj.raw_score
+            source = result_obj.source
+            chunk = result_obj.chunk
+            metadata = result_obj.metadata
         else:
-            title = r.get("title", "Untitled")
-            score = r.get("weighted_score", 0)
-            raw = r.get("raw_score", 0)
-            source = r.get("source", "?")
-            chunk = r.get("chunk", "")
-            metadata = r.get("metadata", {})
+            title = result_obj.get("title", "Untitled")
+            score = result_obj.get("weighted_score", 0)
+            raw = result_obj.get("raw_score", 0)
+            source = result_obj.get("source", "?")
+            chunk = result_obj.get("chunk", "")
+            metadata = result_obj.get("metadata", {})
 
         source_badge = source_labels.get(source, source)
         with st.expander(f"[{score:.3f}] {title}  `{source_badge}`"):
-            # Chunk text
             display_chunk = chunk[:800]
             if len(chunk) > 800:
                 display_chunk += "..."
             st.markdown(f"> {display_chunk}")
+            st.caption(f"Source: {source_badge} | Raw: {raw:.3f} | Weighted: {score:.3f}")
 
-            # Scores
-            st.caption(
-                f"Source: {source_badge} | "
-                f"Raw: {raw:.3f} | Weighted: {score:.3f}"
-            )
-
-            # Metadata
             if metadata:
                 meta_parts = []
-                for k, v in metadata.items():
-                    if v is None:
+                for key, value in metadata.items():
+                    if value is None:
                         continue
-                    # Convert numpy/pandas types to native Python
                     import numpy as np
-                    if isinstance(v, np.ndarray):
-                        v = v.tolist()
-                    elif isinstance(v, (np.integer,)):
-                        v = int(v)
-                    elif isinstance(v, (np.floating,)):
-                        v = float(v)
-                    # Skip empty values
-                    if isinstance(v, (list, tuple)):
-                        if len(v) == 0:
+
+                    if isinstance(value, np.ndarray):
+                        value = value.tolist()
+                    elif isinstance(value, (np.integer,)):
+                        value = int(value)
+                    elif isinstance(value, (np.floating,)):
+                        value = float(value)
+
+                    if isinstance(value, (list, tuple)):
+                        if len(value) == 0:
                             continue
-                        v = ", ".join(str(x) for x in list(v)[:5])
-                    elif isinstance(v, str) and v == "":
+                        value = ", ".join(str(x) for x in list(value)[:5])
+                    elif isinstance(value, str) and value == "":
                         continue
-                    meta_parts.append(f"**{k}:** {v}")
+
+                    meta_parts.append(f"**{key}:** {value}")
+
                 if meta_parts:
                     st.markdown(" | ".join(meta_parts))
 
-    # Tab: All
     with tabs[0]:
-        for r in results:
-            _display_result(r)
+        for result in results:
+            _display_result(result)
 
-    # Per-source tabs
-    for i, source in enumerate(sources_present):
-        with tabs[i + 1]:
+    for idx, source in enumerate(sources_present):
+        with tabs[idx + 1]:
             source_results = [
-                r for r in results
-                if (r.source if hasattr(r, 'source')
-                    else r.get("source")) == source
+                result
+                for result in results
+                if (result.source if hasattr(result, "source") else result.get("source")) == source
             ]
-            for r in source_results:
-                _display_result(r)
+            for result in source_results:
+                _display_result(result)
 
-    # Dedup details (collapsible)
     if dedup_log:
         with st.expander(f"Dedup Details ({len(dedup_log)} removed)"):
             for entry in dedup_log:
                 st.caption(
                     f"Removed: \"{entry.get('removed_title', '?')}\" "
-                    f"({entry.get('removed_source', '?')}) — "
+                    f"({entry.get('removed_source', '?')}) - "
                     f"Similar to: \"{entry.get('kept_title', '?')}\" "
-                    f"({entry.get('kept_source', '?')}) — "
+                    f"({entry.get('kept_source', '?')}) - "
                     f"Similarity: {entry.get('similarity', 0):.3f}"
                 )
 

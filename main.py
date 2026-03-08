@@ -108,6 +108,70 @@ class ResearchResult:
     query: str
 
 
+# ============================================
+# Module-level synthesis helpers
+# ============================================
+
+def _build_synthesis_context(nodes, start_index=1):
+    """Build numbered context string for synthesis prompt."""
+    context_parts = []
+    for i, node in enumerate(nodes, start_index):
+        md = node.metadata
+        source_type = md.get('source_type', 'vault')
+        title = md.get('title') or md.get('book_title') or md.get('file_name', 'Unknown')
+        file_path = md.get('file_path', '')
+        if source_type == 'saved_items':
+            display_path = md.get('display_label') or file_path
+        elif source_type == 'books':
+            author = md.get('book_author', '')
+            display_path = f"{title} — {author}" if author else title
+        else:
+            display_path = file_path
+        context_parts.append(
+            f"[{i}] Source: {title}\n"
+            f"File: {display_path} ({source_type})\n"
+            f"Content:\n{node.node.text}\n"
+        )
+    return "\n---\n".join(context_parts)
+
+
+def _build_chunk_prompt(nodes, query_str, chunk_idx=0, is_continuation=False):
+    """Build synthesis prompt for a chunk. Handles batch notes and word count."""
+    from query_engine import RESEARCH_TEMPLATE
+
+    num_sources = len(nodes)
+    numbered_context = _build_synthesis_context(nodes, start_index=1)
+
+    research_prompt = RESEARCH_TEMPLATE.replace("{num_sources}", str(num_sources))
+    research_prompt = research_prompt.replace("{context_str}", numbered_context)
+    research_prompt = research_prompt.replace("{query_str}", query_str)
+
+    # Batch note for continuations
+    if is_continuation:
+        batch_note = (
+            "\n\n--- BATCH NOTE ---\n"
+            "This is an additional batch covering more sources. "
+            "Skip the executive summary. Focus on NEW insights from these sources only. "
+            "Do NOT repeat themes covered in earlier batches. "
+            "The user's formatting instructions above still apply.\n"
+            "--- END BATCH NOTE ---\n"
+        )
+        research_prompt += batch_note
+
+    # Word count enforcement for large chunks
+    if num_sources >= 300:
+        length_note = (
+            f"\n\n--- LENGTH REQUIREMENT ---\n"
+            f"With {num_sources} sources provided, you MUST generate a MINIMUM of 3,000 words. "
+            f"Aim for 5,000-10,000 words to adequately cover all relevant information. "
+            f"Do NOT stop early.\n"
+            f"--- END LENGTH REQUIREMENT ---\n"
+        )
+        research_prompt += length_note
+
+    return research_prompt
+
+
 class UltraRAG:
     """Main RAG system for Obsidian vault."""
     
@@ -162,6 +226,9 @@ class UltraRAG:
             self.web_retriever = None
             if self.config.web_search.enabled:
                 self._setup_web_retriever()
+
+            # Saved items (TheSource) retriever
+            self.saved_items_retriever = None
 
             logger.info("UltraRAG system initialized successfully")
 
@@ -453,9 +520,20 @@ class UltraRAG:
             # Setup query engine
             self._setup_query_engine()
 
-            # Auto-load conversations index if enabled
+            # Load all optional sources WITHOUT rebuilding federated engine each time
+            self._auto_load_books(rebuild_federated=False)
             if self.config.conversations.enabled and self.config.conversations.path:
-                self._auto_load_conversations()
+                self._auto_load_conversations(rebuild_federated=False)
+            self._auto_load_saved_items(rebuild_federated=False)
+
+            # Build federated engine ONCE with all loaded sources
+            has_extra = (
+                self.conversations_index is not None
+                or self.books_index is not None
+                or self.saved_items_retriever is not None
+            )
+            if has_extra:
+                self._setup_federated_engine()
 
             return True
 
@@ -463,7 +541,7 @@ class UltraRAG:
             print(f"Failed to load existing index: {e}")
             return False
 
-    def _auto_load_conversations(self):
+    def _auto_load_conversations(self, rebuild_federated: bool = True):
         """Auto-load or index conversations if enabled in config."""
         conv_path = self.config.conversations.path
 
@@ -475,12 +553,52 @@ class UltraRAG:
         if self.conversations_index_exists():
             print("\n📚 Loading conversations index...")
             if self.load_conversations_index():
-                self._setup_federated_engine()
+                if rebuild_federated:
+                    self._setup_federated_engine()
                 print("✅ Federated search enabled (vault + conversations)")
         else:
             # Auto-index conversations (non-interactive mode)
             print(f"\n📚 Auto-indexing conversations from: {conv_path}")
             self.index_conversations(conv_path, force_reindex=False, interactive=False)
+
+    def _auto_load_books(self, rebuild_federated: bool = True):
+        """Auto-load books index if it exists on disk."""
+        if not self.config.books.enabled:
+            return
+        if self.books_index is not None:
+            return  # Already loaded
+        if not self.books_index_exists():
+            return
+        try:
+            print("\n📚 Auto-loading books index...")
+            if self.load_books_index():
+                if rebuild_federated and self.index is not None:
+                    self._setup_federated_engine()
+                print("✅ Books index loaded (federated search updated)")
+            else:
+                print("⚠️  Books index exists but failed to load")
+        except Exception as e:
+            logger.warning(f"Failed to auto-load books: {e}")
+
+    def _auto_load_saved_items(self, rebuild_federated: bool = True):
+        """Auto-load saved_items (TheSource) retriever if enabled in config."""
+        if not self.config.saved_items.enabled:
+            return
+        try:
+            from saved_items_retriever import SavedItemsRetriever
+            retriever = SavedItemsRetriever(
+                config=self.config.saved_items,
+                top_k=self.config.retrieval.federated_top_k_per_source,
+            )
+            if retriever.validate():
+                self.saved_items_retriever = retriever
+                if rebuild_federated and self.index is not None:
+                    self._setup_federated_engine()
+                print("✅ TheSource (saved items) loaded")
+            else:
+                print("⚠️  TheSource table not found or dim mismatch — saved items disabled")
+        except Exception as e:
+            logger.warning(f"Failed to load saved items: {e}")
 
     def index_vault(self, force_reindex: bool = False, batch_size: Optional[int] = None):
         """Index the entire Obsidian vault with batch processing and checkpointing.
@@ -674,7 +792,10 @@ class UltraRAG:
 
         # Setup query engine
         self._setup_query_engine()
-    
+
+        # Auto-load saved_items if enabled
+        self._auto_load_saved_items()
+
     def _setup_query_engine(self):
         """Setup query engine after indexing."""
         if self.index is None:
@@ -691,6 +812,9 @@ class UltraRAG:
                 wikilink_graph=getattr(self, 'wikilink_graph', {}),  # Pass wikilink graph if available
                 query_transformer=self.query_transformer  # Pass query transformer
             )
+            # Cache BM25 retriever so _setup_federated_engine() can reuse it without rebuilding
+            if hasattr(self.query_engine, 'bm25_retriever') and self.query_engine.bm25_retriever is not None:
+                self.bm25_retriever = self.query_engine.bm25_retriever
         else:
             print("Using standard query engine")
             self.query_engine = RAGQueryEngine(
@@ -1056,7 +1180,9 @@ class UltraRAG:
         self.books_vector_store = LanceDBVectorStore(
             uri=str(db_path),
             table_name=table_name,
-            mode="overwrite" if not table_exists else "append"
+            mode="overwrite" if not table_exists else "append",
+            # Books metadata includes list fields (e.g. book_categories).
+            flat_metadata=False,
         )
 
         return table_exists
@@ -1152,10 +1278,20 @@ class UltraRAG:
             print(f"❌ Books path not found: {bks_path}")
             return
 
-        # Show stats
+        # Discover current books and compute stats
         loader = BookLoader(bks_path)
-        stats = loader.get_book_stats()
-        current_book_paths = {str(p) for p in loader.discover_books()}
+        all_book_paths = loader.discover_books()
+        current_book_paths = {str(p) for p in all_book_paths}
+        stats = {
+            "total_books": len(all_book_paths),
+            "by_type": {"epub": 0, "pdf": 0},
+            "total_size_mb": 0.0,
+        }
+        for book_path in all_book_paths:
+            file_type = book_path.suffix.lower().lstrip(".")
+            stats["by_type"][file_type] = stats["by_type"].get(file_type, 0) + 1
+            stats["total_size_mb"] += book_path.stat().st_size / (1024 * 1024)
+        stats["total_size_mb"] = round(stats["total_size_mb"], 2)
         print(f"\nFound {stats['total_books']} books ({stats['total_size_mb']} MB)")
         print(f"  EPUB: {stats['by_type'].get('epub', 0)}")
         print(f"  PDF: {stats['by_type'].get('pdf', 0)}")
@@ -1164,9 +1300,26 @@ class UltraRAG:
             print("No books found!")
             return
 
+        # Track what this run should index (all books by default)
+        selected_book_paths: list[Path] = list(all_book_paths)
+        incremental_mode = False
+        existing_extra_count = 0
+
         # Check for existing index
         if not force_reindex and self.books_index_exists():
-            alignment = self._books_index_alignment(current_book_paths)
+            indexed_book_paths = self._get_books_indexed_paths()
+            overlap_count = len(indexed_book_paths & current_book_paths)
+            missing_paths = sorted(current_book_paths - indexed_book_paths)
+            extra_paths = sorted(indexed_book_paths - current_book_paths)
+            alignment = {
+                "current_count": len(current_book_paths),
+                "indexed_count": len(indexed_book_paths),
+                "overlap_count": overlap_count,
+                "coverage": (overlap_count / len(current_book_paths)) if current_book_paths else 0.0,
+                "missing_from_index": len(missing_paths),
+                "indexed_not_in_current": len(extra_paths),
+            }
+            existing_extra_count = len(extra_paths)
             has_mismatch = alignment["coverage"] < 0.95 or alignment["indexed_not_in_current"] > 0
 
             if interactive:
@@ -1185,29 +1338,64 @@ class UltraRAG:
                 print("Options:")
                 if has_mismatch:
                     print("  1. Load existing (fast, NOT recommended)")
-                    print("  2. Recreate (recommended)")
+                    if missing_paths:
+                        print("  2. Incrementally index missing books (recommended)")
+                        print("  3. Recreate (slow)")
+                        print("  4. Cancel")
+                    else:
+                        print("  2. Recreate (recommended)")
+                        print("  3. Cancel")
                 else:
                     print("  1. Load existing (fast)")
                     print("  2. Recreate (slow)")
-                print("  3. Cancel")
+                    print("  3. Cancel")
 
-                choice = input("\nChoice (1/2/3): ").strip()
+                choice_prompt = "\nChoice (1/2/3): " if (not missing_paths or not has_mismatch) else "\nChoice (1/2/3/4): "
+                choice = input(choice_prompt).strip()
+                allow_incremental = bool(missing_paths and has_mismatch)
                 if choice == "1":
                     if self.load_books_index():
                         print("Books index loaded!")
                         self._setup_federated_engine()
                         return
                     print("Failed to load. Recreating...")
-                elif choice == "3":
+                elif allow_incremental and choice == "2":
+                    if self.load_books_index():
+                        selected_book_paths = [Path(p) for p in missing_paths]
+                        incremental_mode = True
+                        print(f"Will incrementally index {len(selected_book_paths)} missing books...")
+                    else:
+                        print("Failed to load existing index. Recreating...")
+                elif allow_incremental and choice == "3":
+                    # Continue to recreate
+                    pass
+                elif allow_incremental and choice == "4":
                     return
-                # choice == "2" continues to recreate
+                elif not allow_incremental and choice == "2":
+                    # Continue to recreate
+                    pass
+                elif not allow_incremental and choice == "3":
+                    return
+                else:
+                    print("Invalid choice. Cancelling.")
+                    return
             else:
                 # Non-interactive: load existing only if coverage looks valid
                 if not has_mismatch and self.load_books_index():
                     print("Books index loaded!")
                     self._setup_federated_engine()
                     return
-                if has_mismatch:
+                if alignment["missing_from_index"] > 0:
+                    if self.load_books_index():
+                        selected_book_paths = [Path(p) for p in missing_paths]
+                        incremental_mode = True
+                        print(
+                            f"Existing books index missing {len(selected_book_paths)} current books. "
+                            "Incrementally indexing missing books..."
+                        )
+                    else:
+                        print("Failed to load existing books index. Rebuilding...")
+                elif has_mismatch:
                     print(
                         "Existing books index appears stale for current BOOKS_PATH. "
                         "Rebuilding..."
@@ -1215,13 +1403,20 @@ class UltraRAG:
                 else:
                     print("Failed to load existing books index. Will create new index...")
 
-        # Setup vector store
-        mode = "overwrite" if force_reindex or self.books_index_exists() else "create"
-        self._setup_books_vector_store(mode=mode)
+        # Setup vector store when creating/recreating index
+        if not incremental_mode:
+            mode = "overwrite" if force_reindex or self.books_index_exists() else "create"
+            self._setup_books_vector_store(mode=mode)
 
-        # Load all books
-        print(f"\nLoading books from: {bks_path}")
-        documents = loader.load_all_books(show_progress=True)
+        # Load selected books
+        if incremental_mode:
+            print(f"\nLoading {len(selected_book_paths)} new books from: {bks_path}")
+            documents = []
+            for book_path in tqdm(selected_book_paths, desc="Loading books"):
+                documents.extend(loader.load_book(book_path))
+        else:
+            print(f"\nLoading books from: {bks_path}")
+            documents = loader.load_all_books(show_progress=True)
 
         if not documents:
             print("No documents extracted from books!")
@@ -1274,8 +1469,20 @@ class UltraRAG:
                 print(f"Warning: Error in batch {batch_num}: {e}")
                 continue
 
-        self.books_nodes = all_nodes
-        print(f"\n✅ Indexed {len(all_nodes)} book chunks from {stats['total_books']} books!")
+        if incremental_mode and self.books_nodes:
+            self.books_nodes.extend(all_nodes)
+        else:
+            self.books_nodes = all_nodes
+
+        if incremental_mode:
+            print(f"\n✅ Incrementally indexed {len(all_nodes)} book chunks from {len(selected_book_paths)} books!")
+            if existing_extra_count > 0:
+                print(
+                    f"⚠️  Index still contains {existing_extra_count} books not in current directory. "
+                    "Use recreate to fully sync removals."
+                )
+        else:
+            print(f"\n✅ Indexed {len(all_nodes)} book chunks from {stats['total_books']} books!")
 
         # Setup federated engine if vault index exists
         if self.index is not None:
@@ -1332,14 +1539,15 @@ class UltraRAG:
 
         sources = []
 
-        # Vault source
+        # Vault source — pass prebuilt BM25 to avoid rebuilding
         sources.append(IndexSource(
             name="vault",
             index=self.index,
             source_type="vault",
             weight=1.0,
             nodes=self.nodes,
-            wikilink_graph=getattr(self, 'wikilink_graph', {})
+            wikilink_graph=getattr(self, 'wikilink_graph', {}),
+            prebuilt_bm25=self.bm25_retriever,  # Reuse vault BM25 built in _setup_query_engine
         ))
 
         # Conversations source
@@ -1360,6 +1568,15 @@ class UltraRAG:
                 source_type="books",
                 weight=self.config.books.weight,
                 nodes=self.books_nodes
+            ))
+
+        # Saved items (TheSource) source — uses custom retriever (flat schema)
+        if self.saved_items_retriever is not None:
+            sources.append(IndexSource(
+                name="saved_items",
+                source_type="saved_items",
+                weight=self.config.saved_items.weight,
+                custom_retriever=self.saved_items_retriever,
             ))
 
         if len(sources) > 1:
@@ -1461,12 +1678,26 @@ class UltraRAG:
                 # Handle NodeWithScore wrapper
                 node_obj = node.node if hasattr(node, 'node') else node
                 metadata = node_obj.metadata
-                title = metadata.get('title', 'Unknown')
-                file_path = metadata.get('file_path', metadata.get('file_name', ''))
                 source_type = metadata.get('source_type', 'vault')
+                # Books store title as book_title; fall back gracefully
+                title = (
+                    metadata.get('title')
+                    or metadata.get('book_title')
+                    or metadata.get('file_name', 'Unknown')
+                )
+                file_path = metadata.get('file_path', metadata.get('file_name', ''))
+                # For saved_items use display_label (domain) instead of raw item_id
+                # For books, use the book title + author for readability
+                if source_type == 'saved_items':
+                    display_path = metadata.get('display_label') or file_path
+                elif source_type == 'books':
+                    author = metadata.get('book_author', '')
+                    display_path = f"{title} — {author}" if author else title
+                else:
+                    display_path = file_path
                 context_parts.append(
                     f"[{i}] Source: {title}\n"
-                    f"File: {file_path} (source_type: {source_type})\n"
+                    f"File: {display_path} (source_type: {source_type})\n"
                     f"Content:\n{node_obj.text}\n"
                 )
             numbered_context = "\n---\n".join(context_parts)
@@ -1486,7 +1717,11 @@ class UltraRAG:
             answer = response.text
 
             # Step 7: Build source summary
-            source_summary = {"total_nodes": total_retrieved, "by_source": {}, "by_type": {"vault": 0, "conversations": 0}}
+            source_summary = {
+                "total_nodes": total_retrieved,
+                "by_source": {},
+                "by_type": {"vault": 0, "conversations": 0, "books": 0, "saved_items": 0},
+            }
             for node in nodes_for_synthesis:
                 node_obj = node.node if hasattr(node, 'node') else node
                 st = node_obj.metadata.get('source_type', 'vault')
@@ -1499,13 +1734,29 @@ class UltraRAG:
                 for i, node in enumerate(nodes_for_synthesis, 1):
                     node_obj = node.node if hasattr(node, 'node') else node
                     metadata = node_obj.metadata
+                    stype = metadata.get('source_type', 'vault')
+                    # Books store title as book_title; fall back gracefully
+                    title = (
+                        metadata.get('title')
+                        or metadata.get('book_title')
+                        or metadata.get('file_name', 'Unknown')
+                    )
+                    # For books, display_label = "Title — Author" for the link line
+                    if stype == 'books':
+                        author = metadata.get('book_author', '')
+                        display_label = f"{title} — {author}" if author else title
+                    else:
+                        display_label = metadata.get('display_label')
                     sources.append({
                         'rank': i,
-                        'title': metadata.get('title', 'Unknown'),
+                        'title': title,
                         'file': metadata.get('file_path', metadata.get('file_name', 'Unknown')),
                         'score': node.score if hasattr(node, 'score') else 0.0,
                         'excerpt': node_obj.text[:1500] + "..." if len(node_obj.text) > 1500 else node_obj.text,
-                        'source_type': metadata.get('source_type', 'vault')
+                        'source_type': stype,
+                        'url': metadata.get('url'),
+                        'domain': metadata.get('domain'),
+                        'display_label': display_label,
                     })
 
                 return {
@@ -1547,7 +1798,8 @@ class UltraRAG:
         return_sources: bool = True,
         max_sources: int = None,
         date_filter: DateFilterPreset = "all_time",
-        force_exhaustive: bool = False
+        force_exhaustive: bool = False,
+        source_filter: Optional[List[str]] = None
     ):
         """Execute multi-step research mode for complex queries.
 
@@ -1560,6 +1812,8 @@ class UltraRAG:
             max_sources: Maximum sources to include in response (None = all)
             date_filter: Date filter preset to apply
             force_exhaustive: Force all iterations regardless of confidence threshold
+            source_filter: List of source names to query (e.g. ["vault", "conversations", "books", "saved_items"]).
+                           None = vault only (legacy default).
 
         Returns:
             Dictionary with answer, sources, and research summary
@@ -1579,27 +1833,81 @@ class UltraRAG:
 
         try:
             # Import research module
-            from research_mode import ResearchRetriever
+            from research_mode import ResearchRetriever, llm_complete_with_retry
             from llama_index.core.retrievers import VectorIndexRetriever
 
-            # Create a FRESH retriever without self-correction wrapper
-            # Research mode has its own iterative refinement, so stacking with
-            # self-correction causes exponential slowdown (3 iterations × 3 retries = 9x)
-            base_retriever = VectorIndexRetriever(
-                index=self.index,
-                similarity_top_k=self.config.retrieval.top_k
+            # Determine if we should use federated retrieval (multiple sources)
+            use_federated = (
+                source_filter is not None
+                and len(source_filter) > 1
+                and any(s != "vault" for s in source_filter)
             )
 
-            # Add query transformation if enabled (but NOT self-correction)
-            if self.query_transformer and self.config.retrieval.query_transform_method not in ["none", "disabled"]:
-                from query_engine import QueryTransformRetriever
-                base_retriever = QueryTransformRetriever(
-                    base_retriever=base_retriever,
-                    query_transformer=self.query_transformer,
-                    transform_method=self.config.retrieval.query_transform_method,
-                    num_queries=self.config.retrieval.query_transform_num_queries
+            if use_federated:
+                # Build a FederatedRetriever covering all checked sources
+                from federated_query import FederatedRetriever, IndexSource
+                fed_sources = []
+
+                if "vault" in source_filter and self.index is not None:
+                    fed_sources.append(IndexSource(
+                        name="vault", index=self.index, source_type="vault",
+                        weight=1.0, nodes=self.nodes,
+                        wikilink_graph=getattr(self, 'wikilink_graph', {}),
+                        prebuilt_bm25=self.bm25_retriever,
+                    ))
+                if "conversations" in source_filter and self.conversations_index is not None:
+                    fed_sources.append(IndexSource(
+                        name="conversations", index=self.conversations_index,
+                        source_type="conversations",
+                        weight=self.config.conversations.weight,
+                        nodes=self.conversations_nodes,
+                    ))
+                if "books" in source_filter and self.books_index is not None:
+                    fed_sources.append(IndexSource(
+                        name="books", index=self.books_index,
+                        source_type="books",
+                        weight=self.config.books.weight,
+                        nodes=self.books_nodes,
+                    ))
+                if "saved_items" in source_filter and self.saved_items_retriever is not None:
+                    fed_sources.append(IndexSource(
+                        name="saved_items", source_type="saved_items",
+                        weight=self.config.saved_items.weight,
+                        custom_retriever=self.saved_items_retriever,
+                    ))
+
+                if len(fed_sources) > 1:
+                    base_retriever = FederatedRetriever(
+                        sources=fed_sources,
+                        config=self.config,
+                        query_transformer=self.query_transformer,
+                        reranker=self.reranker,
+                        top_k_per_source=self.config.retrieval.top_k,
+                    )
+                    logger.info(f"Research mode: federated retriever with {len(fed_sources)} sources: "
+                                f"{[s.name for s in fed_sources]}")
+                else:
+                    # Only one source actually available, fall back to vault-only
+                    use_federated = False
+
+            if not use_federated:
+                # Vault-only retriever (legacy path)
+                # Research mode has its own iterative refinement, so no self-correction wrapper
+                base_retriever = VectorIndexRetriever(
+                    index=self.index,
+                    similarity_top_k=self.config.retrieval.top_k
                 )
-                logger.info("Research mode: Using query transformation without self-correction")
+
+                # Add query transformation if enabled (but NOT self-correction)
+                if self.query_transformer and self.config.retrieval.query_transform_method not in ["none", "disabled"]:
+                    from query_engine import QueryTransformRetriever
+                    base_retriever = QueryTransformRetriever(
+                        base_retriever=base_retriever,
+                        query_transformer=self.query_transformer,
+                        transform_method=self.config.retrieval.query_transform_method,
+                        num_queries=self.config.retrieval.query_transform_num_queries
+                    )
+                    logger.info("Research mode: vault-only with query transformation")
 
             # Create research retriever
             research_retriever = ResearchRetriever(
@@ -1643,88 +1951,148 @@ class UltraRAG:
             if synthesis_limit > 0:
                 nodes_for_retry = all_retrieved[:synthesis_limit]
 
-            # Progressive retry strategy for MAX_TOKENS errors
-            # Try: 100% → 80% → 66% → 300 (hard floor)
-            HARD_FLOOR = 300
-            retry_percentages = [1.0, 0.8, 0.66]  # 100%, 80%, 66%
+            # Synthesis strategy: estimate total tokens, pick single-call or chunked path
+            from citations import offset_citations, validate_citations
+
+            TOKEN_QUOTA = 1_000_000
+            HARD_FLOOR = 150  # ~525K tokens at 3500/node — safe under 1M
             available_nodes = len(nodes_for_retry)
 
-            # Build attempt limits: percentages first, then hard floor
-            attempt_limits = []
-            for pct in retry_percentages:
-                limit = int(available_nodes * pct)
-                # Only add if above hard floor and not duplicate
-                if limit > HARD_FLOOR and limit not in attempt_limits:
-                    attempt_limits.append(limit)
-            # Always end with hard floor (or total if smaller)
-            attempt_limits.append(min(available_nodes, HARD_FLOOR))
+            # Estimate avg tokens per node (rough: 1 token ≈ 4 chars)
+            if available_nodes > 0:
+                sample = nodes_for_retry[:min(20, available_nodes)]
+                avg_chars = sum(len(n.node.text) + 200 for n in sample) / len(sample)  # +200 for metadata/template
+                est_tokens_per_node = avg_chars / 3.5  # conservative estimate
+            else:
+                est_tokens_per_node = 2000
 
-            # Remove duplicates and sort descending
-            attempt_limits = sorted(set(attempt_limits), reverse=True)
-
-            logger.info(f"Research synthesis: {total_retrieved} retrieved, {available_nodes} for synthesis, retry limits: {attempt_limits}")
-
-            # Try synthesis with progressive node limits
-            response = None
+            total_est_tokens = available_nodes * est_tokens_per_node
             nodes_for_synthesis = None
+            combined_answer = None
 
-            for attempt_num, node_limit in enumerate(attempt_limits, 1):
-                nodes_for_synthesis = nodes_for_retry[:node_limit]
-                num_sources = len(nodes_for_synthesis)
+            if total_est_tokens <= TOKEN_QUOTA * 0.9:
+                # === SINGLE-CALL PATH ===
+                logger.info(f"Single-call synthesis: {available_nodes} nodes (~{total_est_tokens/1e6:.1f}M tokens)")
 
-                logger.info(f"Synthesis attempt {attempt_num}/{len(attempt_limits)}: using {num_sources} nodes")
-
-                # Build numbered context manually for proper [1], [2], [3] citations
-                context_parts = []
-                for i, node in enumerate(nodes_for_synthesis, 1):
-                    title = node.metadata.get('title', 'Unknown')
-                    file_path = node.metadata.get('file_path', '')
-                    source_type = node.metadata.get('source_type', 'vault')
-                    context_parts.append(
-                        f"[{i}] Source: {title}\n"
-                        f"File: {file_path} ({source_type})\n"
-                        f"Content:\n{node.node.text}\n"
-                    )
-                numbered_context = "\n---\n".join(context_parts)
-
-                # Format template with source count and numbered context
-                research_prompt = RESEARCH_TEMPLATE.replace("{num_sources}", str(num_sources))
-                research_prompt = research_prompt.replace("{context_str}", numbered_context)
-                research_prompt = research_prompt.replace("{query_str}", query_str)
-
-                # For large source sets (300+), enforce minimum word count
-                if num_sources >= 300:
-                    word_count_instruction = (
-                        "\n\n**CRITICAL LENGTH REQUIREMENT**: With {num_sources} sources provided, "
-                        "you MUST generate a MINIMUM of 3,000 words. Aim for 5,000-10,000 words "
-                        "to adequately cover all relevant information. Do NOT stop early.\n"
-                    ).format(num_sources=num_sources)
-                    # Insert before the final instruction line
-                    research_prompt = research_prompt.replace(
-                        "Generate a thorough, detailed research report",
-                        word_count_instruction + "Generate a thorough, detailed research report"
-                    )
-                    logger.info(f"Enforcing minimum 3,000 word output for {num_sources} sources")
-
+                research_prompt = _build_chunk_prompt(nodes_for_retry, query_str)
                 try:
-                    # Use LLM directly for better control over context
-                    response = Settings.llm.complete(research_prompt)
-                    logger.info(f"Synthesis succeeded on attempt {attempt_num} with {num_sources} nodes")
-                    break  # Success!
-                except RuntimeError as e:
-                    if "MAX_TOKENS" in str(e):
-                        logger.warning(
-                            f"Synthesis attempt {attempt_num} hit MAX_TOKENS with {num_sources} nodes. "
-                            f"{'Retrying with fewer nodes...' if attempt_num < len(attempt_limits) else 'No more retries.'}"
-                        )
-                        if attempt_num >= len(attempt_limits):
-                            raise  # Re-raise on final attempt
-                        continue
-                    raise  # Re-raise non-MAX_TOKENS errors
+                    response = llm_complete_with_retry(Settings.llm, research_prompt, max_retries=2)
+                    combined_answer = response.text
+                    nodes_for_synthesis = nodes_for_retry
+                    logger.info(f"Single-call synthesis succeeded with {available_nodes} nodes")
+                except Exception as e:
+                    error_str = str(e)
+                    is_recoverable = ("429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+                                      or "MAX_TOKENS" in error_str
+                                      or "token count exceeds" in error_str.lower())
+                    if is_recoverable:
+                        # Fall back to progressive retry with reduced nodes
+                        logger.warning(f"Single-call failed ({error_str[:80]}), falling back to progressive retry")
+                        for pct in [0.66, 0.50, 0.33]:
+                            limit = max(HARD_FLOOR, int(available_nodes * pct))
+                            subset = nodes_for_retry[:limit]
+                            retry_prompt = _build_chunk_prompt(subset, query_str)
+                            try:
+                                response = llm_complete_with_retry(Settings.llm, retry_prompt, max_retries=2)
+                                combined_answer = response.text
+                                nodes_for_synthesis = subset
+                                logger.info(f"Progressive retry succeeded with {len(subset)} nodes")
+                                break
+                            except Exception:
+                                continue
+                        if combined_answer is None:
+                            raise
+                    else:
+                        raise
 
-            # Format result (complete() returns CompletionResponse with .text attribute)
+            elif self.config.llm.backend == "cli":
+                # === CLI FALLBACK ===
+                # CLI has 120s hard timeout, too short for multi-chunk
+                logger.warning("Chunked synthesis not supported with CLI backend, using progressive retry")
+                for pct in [0.66, 0.50, 0.33]:
+                    limit = max(HARD_FLOOR, int(available_nodes * pct))
+                    subset = nodes_for_retry[:limit]
+                    research_prompt = _build_chunk_prompt(subset, query_str)
+                    try:
+                        response = llm_complete_with_retry(Settings.llm, research_prompt, max_retries=2)
+                        combined_answer = response.text
+                        nodes_for_synthesis = subset
+                        logger.info(f"CLI progressive retry succeeded with {len(subset)} nodes")
+                        break
+                    except Exception:
+                        continue
+                if combined_answer is None:
+                    # Last resort: hard floor
+                    subset = nodes_for_retry[:HARD_FLOOR]
+                    research_prompt = _build_chunk_prompt(subset, query_str)
+                    response = llm_complete_with_retry(Settings.llm, research_prompt, max_retries=2)
+                    combined_answer = response.text
+                    nodes_for_synthesis = subset
+
+            else:
+                # === CHUNKED SYNTHESIS PATH (API backend only) ===
+                CHUNK_BUDGET = int(TOKEN_QUOTA * 0.8)  # 800K per chunk
+                nodes_per_chunk = max(50, int(CHUNK_BUDGET / est_tokens_per_node))
+                chunks = [nodes_for_retry[i:i + nodes_per_chunk]
+                          for i in range(0, available_nodes, nodes_per_chunk)]
+
+                logger.info(
+                    f"Chunked synthesis: {len(chunks)} chunks of ~{nodes_per_chunk} nodes "
+                    f"(~{nodes_per_chunk * est_tokens_per_node / 1e6:.1f}M tokens each)"
+                )
+
+                chunk_responses = []
+                global_start_index = 0
+
+                for chunk_idx, chunk_nodes in enumerate(chunks):
+                    num_in_chunk = len(chunk_nodes)
+                    is_continuation = chunk_idx > 0
+
+                    research_prompt = _build_chunk_prompt(
+                        chunk_nodes, query_str, chunk_idx, is_continuation
+                    )
+
+                    try:
+                        response = llm_complete_with_retry(Settings.llm, research_prompt, max_retries=2)
+                    except Exception as e:
+                        error_str = str(e)
+                        is_recoverable = ("429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+                                          or "MAX_TOKENS" in error_str
+                                          or "token count exceeds" in error_str.lower())
+                        if is_recoverable and num_in_chunk > 60:
+                            logger.warning(f"Chunk {chunk_idx + 1} failed, splitting in half")
+                            half = num_in_chunk // 2
+                            for sub_nodes in [chunk_nodes[:half], chunk_nodes[half:]]:
+                                sub_prompt = _build_chunk_prompt(
+                                    sub_nodes, query_str, chunk_idx, is_continuation=True
+                                )
+                                sub_resp = llm_complete_with_retry(Settings.llm, sub_prompt, max_retries=2)
+                                chunk_text = offset_citations(sub_resp.text, global_start_index)
+                                chunk_responses.append(chunk_text)
+                                global_start_index += len(sub_nodes)
+                            continue
+                        raise
+
+                    logger.info(f"Chunk {chunk_idx + 1}/{len(chunks)} succeeded ({num_in_chunk} nodes)")
+                    chunk_text = offset_citations(response.text, global_start_index)
+                    chunk_responses.append(chunk_text)
+                    global_start_index += num_in_chunk
+
+                # Merge chunk responses
+                if len(chunk_responses) > 1:
+                    parts = [f"## Part {i}\n\n{text}" for i, text in enumerate(chunk_responses, 1)]
+                    combined_answer = "\n\n---\n\n".join(parts)
+                else:
+                    combined_answer = chunk_responses[0]
+
+                nodes_for_synthesis = nodes_for_retry  # ALL nodes for source list
+
+            # Validate citations and clean whitespace
+            combined_answer = validate_citations(combined_answer, len(nodes_for_synthesis))
+
+            # Format result
             result = {
-                'answer': response.text,
+                'answer': combined_answer,
                 'research_summary': research_result.get_iteration_summary(),
                 'gap_analyses': research_result.get_gap_analyses(),
                 'gap_analyses_markdown': research_result.get_gap_analyses_markdown()
@@ -1734,14 +2102,25 @@ class UltraRAG:
                 sources = []
                 # Use same nodes that were used for synthesis (so citations match)
                 for i, node in enumerate(nodes_for_synthesis, 1):
+                    md = node.metadata
+                    stype = md.get('source_type', 'vault')
+                    title = md.get('title') or md.get('book_title') or md.get('file_name', 'Unknown')
+                    if stype == 'books':
+                        author = md.get('book_author', '')
+                        display_label = f"{title} — {author}" if author else title
+                    else:
+                        display_label = md.get('display_label')
                     sources.append({
                         'rank': i,
-                        'title': node.metadata.get('title', 'Unknown'),
-                        'file': node.metadata.get('file_path', 'Unknown'),  # 'file' for UI consistency
-                        'file_path': node.metadata.get('file_path', 'Unknown'),
+                        'title': title,
+                        'file': md.get('file_path', 'Unknown'),
+                        'file_path': md.get('file_path', 'Unknown'),
                         'score': node.score or 0.0,
                         'excerpt': node.node.text[:1500] + "..." if len(node.node.text) > 1500 else node.node.text,
-                        'source_type': node.metadata.get('source_type', 'vault')
+                        'source_type': stype,
+                        'url': md.get('url'),
+                        'domain': md.get('domain'),
+                        'display_label': display_label,
                     })
                 result['sources'] = sources
                 result['total_sources'] = total_retrieved  # Total retrieved, not just used for synthesis
