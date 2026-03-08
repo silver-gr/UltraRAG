@@ -351,7 +351,8 @@ class UltraRAG:
             # Initialize query transformer with LLM
             self.query_transformer = QueryTransformer(
                 llm=self.llm,
-                embed_model=self.embed_model
+                embed_model=self.embed_model,
+                hyde_temperature=self.config.retrieval.hyde_temperature
             )
 
             # Log the configuration

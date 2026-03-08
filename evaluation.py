@@ -1,24 +1,182 @@
-"""RAGAS-based evaluation framework for UltraRAG system."""
+"""Evaluation framework for UltraRAG system.
+
+Two evaluation modes:
+1. Lightweight per-query metrics (RetrievalEvaluator) -- enable via ENABLE_EVALUATION_LOGGING=true
+   Logs precision@k, recall@k, MRR, NDCG, score stats to data/evaluation_log.json
+2. Full RAGAS benchmark (RAGEvaluator) -- run via `python -m evaluation --dataset ...`
+"""
 from __future__ import annotations
 
 import json
 import logging
+import math
 import sys
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-import pandas as pd
-from datasets import Dataset
-from ragas import evaluate
-from ragas.metrics import (
-    faithfulness,
-    answer_relevancy,
-    context_precision,
-    context_recall,
-)
-
 logger = logging.getLogger(__name__)
+
+# ============================================
+# Lightweight per-query evaluation (Feature 11)
+# ============================================
+
+EVAL_LOG_PATH = Path("data/evaluation_log.json")
+
+
+@dataclass
+class RetrievalMetrics:
+    """Retrieval quality metrics for a single query."""
+    query: str
+    timestamp: float
+    num_retrieved: int
+    precision_at_k: Optional[float] = None
+    recall_at_k: Optional[float] = None
+    mrr: Optional[float] = None
+    ndcg: Optional[float] = None
+    avg_score: Optional[float] = None
+    score_variance: Optional[float] = None
+    unique_sources: int = 0
+
+
+class RetrievalEvaluator:
+    """Lightweight retrieval quality evaluator with standard IR metrics.
+
+    Computes metrics per query and optionally logs to disk. No LLM calls
+    unless evaluate_response() is called explicitly.
+    """
+
+    def evaluate_retrieval(
+        self,
+        query: str,
+        retrieved_nodes: list,
+        relevant_docs: Optional[List[str]] = None,
+        k: int = 10,
+    ) -> RetrievalMetrics:
+        """Compute retrieval metrics.
+
+        Args:
+            query: User query
+            retrieved_nodes: NodeWithScore objects from retriever
+            relevant_docs: Optional list of known-relevant doc paths (for precision/recall)
+            k: Cutoff for @k metrics
+        """
+        top_k_nodes = retrieved_nodes[:k]
+        scores = [n.score or 0.0 for n in top_k_nodes]
+
+        avg_score = sum(scores) / len(scores) if scores else 0.0
+        score_variance = (
+            sum((s - avg_score) ** 2 for s in scores) / len(scores)
+            if scores else 0.0
+        )
+
+        sources = set()
+        for n in top_k_nodes:
+            fp = n.node.metadata.get("file_path", n.node.node_id)
+            sources.add(fp)
+
+        metrics = RetrievalMetrics(
+            query=query,
+            timestamp=time.time(),
+            num_retrieved=len(retrieved_nodes),
+            avg_score=round(avg_score, 4),
+            score_variance=round(score_variance, 4),
+            unique_sources=len(sources),
+        )
+
+        if relevant_docs:
+            retrieved_ids = [
+                n.node.metadata.get("file_path", n.node.node_id)
+                for n in top_k_nodes
+            ]
+            relevant_set = set(relevant_docs)
+
+            hits = sum(1 for rid in retrieved_ids if rid in relevant_set)
+            metrics.precision_at_k = round(hits / k, 4) if k > 0 else 0.0
+            metrics.recall_at_k = round(hits / len(relevant_set), 4) if relevant_set else 0.0
+
+            # MRR
+            for rank, rid in enumerate(retrieved_ids, 1):
+                if rid in relevant_set:
+                    metrics.mrr = round(1.0 / rank, 4)
+                    break
+            else:
+                metrics.mrr = 0.0
+
+            # NDCG@k
+            def dcg(relevances: List[float]) -> float:
+                return sum(rel / math.log2(i + 2) for i, rel in enumerate(relevances))
+
+            rels = [1.0 if rid in relevant_set else 0.0 for rid in retrieved_ids]
+            ideal_rels = sorted(rels, reverse=True)
+            dcg_val = dcg(rels)
+            idcg_val = dcg(ideal_rels)
+            metrics.ndcg = round(dcg_val / idcg_val, 4) if idcg_val > 0 else 0.0
+
+        return metrics
+
+    @staticmethod
+    def log_metrics(metrics: RetrievalMetrics) -> None:
+        """Append metrics to evaluation log file."""
+        try:
+            EVAL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            entries = []
+            if EVAL_LOG_PATH.exists():
+                with open(EVAL_LOG_PATH) as f:
+                    entries = json.load(f)
+            entries.append(asdict(metrics))
+            # Keep last 1000 entries
+            if len(entries) > 1000:
+                entries = entries[-1000:]
+            with open(EVAL_LOG_PATH, "w") as f:
+                json.dump(entries, f, indent=2)
+        except Exception as e:
+            logger.debug(f"Failed to log evaluation metrics: {e}")
+
+    @staticmethod
+    def get_summary(last_n: int = 100) -> Dict[str, Any]:
+        """Get summary statistics from evaluation log."""
+        if not EVAL_LOG_PATH.exists():
+            return {"entries": 0}
+        with open(EVAL_LOG_PATH) as f:
+            entries = json.load(f)
+        recent = entries[-last_n:]
+        if not recent:
+            return {"entries": 0}
+
+        def avg(key):
+            vals = [e[key] for e in recent if e.get(key) is not None]
+            return round(sum(vals) / len(vals), 4) if vals else None
+
+        return {
+            "entries": len(recent),
+            "avg_score": avg("avg_score"),
+            "avg_unique_sources": avg("unique_sources"),
+            "avg_precision_at_k": avg("precision_at_k"),
+            "avg_mrr": avg("mrr"),
+            "avg_ndcg": avg("ndcg"),
+        }
+
+
+# ============================================
+# Full RAGAS benchmark evaluation
+# ============================================
+
+try:
+    import pandas as pd
+    from datasets import Dataset
+    from ragas import evaluate as ragas_evaluate
+    from ragas.metrics import (
+        faithfulness as ragas_faithfulness,
+        answer_relevancy as ragas_answer_relevancy,
+        context_precision as ragas_context_precision,
+        context_recall as ragas_context_recall,
+    )
+    RAGAS_AVAILABLE = True
+except ImportError:
+    RAGAS_AVAILABLE = False
+    logger.debug("RAGAS not available -- full benchmark evaluation disabled")
 
 
 @dataclass
@@ -118,20 +276,12 @@ class EvaluationReport:
 class RAGEvaluator:
     """Automated evaluation using RAGAS metrics.
 
-    This class provides comprehensive evaluation of RAG system performance using
-    the RAGAS framework. It computes multiple metrics to assess different aspects
-    of RAG quality:
+    Requires: pip install ragas datasets pandas
 
-    - Faithfulness: Is the answer grounded in retrieved context? (no hallucination)
+    - Faithfulness: Is the answer grounded in retrieved context?
     - Answer Relevancy: Does the answer address the question?
     - Context Precision: Are retrieved documents relevant?
     - Context Recall: Did we retrieve all needed documents?
-
-    Example:
-        >>> evaluator = RAGEvaluator(rag_system)
-        >>> test_cases = load_test_cases("tests/evaluation_dataset.json")
-        >>> report = evaluator.evaluate(test_cases)
-        >>> report.print_summary()
     """
 
     def __init__(
@@ -245,14 +395,16 @@ class RAGEvaluator:
 
         # Run RAGAS evaluation
         print("\nRunning RAGAS evaluation (this may take a few minutes)...")
+        if not RAGAS_AVAILABLE:
+            raise RuntimeError("RAGAS not installed. Install with: pip install ragas datasets pandas")
         try:
-            evaluation_result = evaluate(
+            evaluation_result = ragas_evaluate(
                 dataset=ragas_dataset,
                 metrics=[
-                    faithfulness,
-                    answer_relevancy,
-                    context_precision,
-                    context_recall,
+                    ragas_faithfulness,
+                    ragas_answer_relevancy,
+                    ragas_context_precision,
+                    ragas_context_recall,
                 ],
             )
         except Exception as e:

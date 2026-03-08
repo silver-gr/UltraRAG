@@ -175,7 +175,8 @@ class QueryTransformer:
         self,
         llm: GoogleGenAI,
         embed_model: Optional[BaseEmbedding] = None,
-        enable_cache: bool = True
+        enable_cache: bool = True,
+        hyde_temperature: float = 0.7
     ):
         """
         Initialize query transformer.
@@ -184,12 +185,32 @@ class QueryTransformer:
             llm: Language model for generating transformations
             embed_model: Optional embedding model (for future use)
             enable_cache: Whether to use LRU cache for expansion results (default: True)
+            hyde_temperature: Temperature for HyDE hypothetical document generation (default: 0.7)
         """
         self.llm = llm
         self.embed_model = embed_model
         self.enable_cache = enable_cache
         self._cache = _expansion_cache
-        logger.info(f"QueryTransformer initialized (cache={'enabled' if enable_cache else 'disabled'})")
+
+        # Create separate HyDE LLM with higher temperature for diverse hypothetical docs
+        self.hyde_llm = self._create_hyde_llm(hyde_temperature)
+        logger.info(f"QueryTransformer initialized (cache={'enabled' if enable_cache else 'disabled'}, hyde_temp={hyde_temperature})")
+
+    def _create_hyde_llm(self, temperature: float):
+        """Create a separate LLM instance for HyDE with higher temperature."""
+        try:
+            import os
+            hyde_llm = GoogleGenAI(
+                model=self.llm.model if hasattr(self.llm, 'model') else "gemini-3-flash-preview",
+                api_key=os.getenv("GOOGLE_API_KEY", ""),
+                temperature=temperature,
+                max_tokens=2048,
+            )
+            logger.info(f"Created HyDE LLM with temperature={temperature}")
+            return hyde_llm
+        except Exception as e:
+            logger.warning(f"Failed to create HyDE LLM (temp={temperature}), using main LLM: {e}")
+            return self.llm
 
     def hyde_transform(self, query: str) -> str:
         """
@@ -247,8 +268,8 @@ Question: {query}
 Write a comprehensive note passage (2-3 paragraphs) that would contain the answer to this question. Use the style and vocabulary typical of knowledge base notes:"""
 
         try:
-            # Generate hypothetical document
-            response = self.llm.complete(prompt)
+            # Generate hypothetical document (using higher-temperature HyDE LLM)
+            response = self.hyde_llm.complete(prompt)
             hypothetical_doc = response.text.strip()
 
             logger.debug(f"Generated hypothetical document ({len(hypothetical_doc)} chars)")
