@@ -20,6 +20,12 @@ SETTINGS_SCHEMA = pa.schema([
 ])
 
 
+def _list_tables(db: Any) -> list[str]:
+    """Return LanceDB table names across API versions."""
+    tables_resp = db.list_tables()
+    return tables_resp.tables if hasattr(tables_resp, "tables") else tables_resp
+
+
 class SettingsStore:
     """Generic key-value settings storage in LanceDB."""
 
@@ -37,7 +43,7 @@ class SettingsStore:
 
     def _ensure_table(self) -> None:
         """Create settings table if it doesn't exist."""
-        if self.TABLE_NAME not in self.db.table_names():
+        if self.TABLE_NAME not in _list_tables(self.db):
             # Create empty table with schema
             self.db.create_table(
                 self.TABLE_NAME,

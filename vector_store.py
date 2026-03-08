@@ -19,6 +19,12 @@ CACHE_DIR = Path("data/cache")
 NODES_CACHE_FILE = CACHE_DIR / "docstore_nodes.pkl"
 
 
+def _list_tables(db: Any) -> list[str]:
+    """Return LanceDB table names across API versions."""
+    tables_resp = db.list_tables()
+    return tables_resp.tables if hasattr(tables_resp, "tables") else tables_resp
+
+
 def _get_index_hash(config: VectorDBConfig, table_name: str = "obsidian_embeddings") -> str:
     """Get hash of index to detect changes."""
     import lancedb
@@ -133,7 +139,7 @@ def index_exists(config: VectorDBConfig, table_name: str = "obsidian_embeddings"
 
         try:
             db = lancedb.connect(str(config.lancedb_path))
-            existing_tables = db.table_names()
+            existing_tables = _list_tables(db)
             return table_name in existing_tables
         except Exception:
             return False
@@ -154,13 +160,20 @@ def index_exists(config: VectorDBConfig, table_name: str = "obsidian_embeddings"
     return False
 
 
-def get_vector_store(config: VectorDBConfig, mode: str = "append", table_name: str = "obsidian_embeddings") -> Any:
+def get_vector_store(
+    config: VectorDBConfig,
+    mode: str = "append",
+    table_name: str = "obsidian_embeddings",
+    flat_metadata: bool = True,
+) -> Any:
     """Initialize vector store based on configuration.
 
     Args:
         config: Vector database configuration
         mode: Mode for LanceDB - "append" (default) or "overwrite"
         table_name: Table name for LanceDB (default: "obsidian_embeddings")
+        flat_metadata: If True, enforce scalar metadata values only. Set False
+            for sources that need array/object metadata (e.g. books categories).
 
     Returns:
         Initialized vector store
@@ -195,7 +208,8 @@ def get_vector_store(config: VectorDBConfig, mode: str = "append", table_name: s
             return LanceDBVectorStore(
                 uri=str(config.lancedb_path),
                 table_name=table_name,
-                mode=mode
+                mode=mode,
+                flat_metadata=flat_metadata,
             )
 
         elif db_type == "qdrant":
@@ -390,7 +404,7 @@ def delete_from_index(
 
     db = lancedb.connect(str(db_path))
 
-    if table_name not in db.table_names():
+    if table_name not in _list_tables(db):
         logger.warning(f"Table '{table_name}' not found")
         return 0
 

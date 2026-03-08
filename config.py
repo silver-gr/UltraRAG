@@ -70,6 +70,15 @@ class VectorDBConfig(BaseModel):
     qdrant_port: int = Field(default=6333)
     qdrant_collection: str = Field(default="obsidian_notes")
 
+    # HNSW index parameters
+    hnsw_m: int = Field(default=16)
+    hnsw_ef_construction: int = Field(default=256)
+    hnsw_ef_search: int = Field(default=128)
+
+    # Quantization
+    enable_quantization: bool = Field(default=False)
+    quantization_type: str = Field(default="int8")  # int8, pq
+
 
 class GraphDBConfig(BaseModel):
     """Graph database configuration."""
@@ -81,8 +90,9 @@ class GraphDBConfig(BaseModel):
 
 class RetrievalConfig(BaseModel):
     """Retrieval configuration."""
-    top_k: int = Field(default=75)
-    rerank_top_n: int = Field(default=100)  # Increased from 10 - let UI max_sources control display
+    top_k: int = Field(default=75)  # Backward compat / UI display count
+    retrieval_candidates: int = Field(default=150)  # How many to fetch from vector+BM25 (pre-rerank)
+    rerank_top_n: int = Field(default=20)  # How many to keep after reranking
     reranker_model: str = Field(default="rerank-2.5")  # Voyage model (no "voyage-" prefix!)
     reranker_token_limit: int = Field(default=200_000_000)  # 200M free tier limit
     enable_hybrid_search: bool = Field(default=True)
@@ -91,6 +101,20 @@ class RetrievalConfig(BaseModel):
     graph_retrieval_depth: int = Field(default=1)
     graph_retrieval_max_links: int = Field(default=3)
     similarity_threshold: float = Field(default=0.3)  # Lowered from 0.7 - cosine similarity often < 0.5
+
+    # Response validation (Self-RAG post-generation hallucination check)
+    validate_responses: bool = Field(default=True)
+
+    # HyDE temperature (higher = more diverse hypothetical documents)
+    hyde_temperature: float = Field(default=0.7)
+
+    # MMR diversity selection
+    enable_mmr: bool = Field(default=False)
+    mmr_lambda: float = Field(default=0.5)  # 0=max diversity, 1=max relevance
+    max_chunks_per_document: int = Field(default=5)
+
+    # Evaluation logging
+    enable_evaluation_logging: bool = Field(default=False)
 
     # Query transformation settings
     query_transform_method: str = Field(default="hyde")
@@ -110,6 +134,11 @@ class RetrievalConfig(BaseModel):
     # Bilingual expansion settings (translate key terms to additional languages)
     enable_bilingual_expansion: bool = Field(default=False)
     expansion_languages: list = Field(default_factory=lambda: ["el"])  # Default: Greek
+
+    # Federated retrieval controls (performance/diversity)
+    federated_top_k_per_source: int = Field(default=100)
+    federated_final_top_k: int = Field(default=120)
+    federated_max_chunks_per_document: int = Field(default=3)
 
     @field_validator('expansion_languages')
     @classmethod
@@ -140,6 +169,14 @@ class RetrievalConfig(BaseModel):
                 f"'multi_query' (query expansion), 'both' (HyDE + multi-query)"
             )
         return v.lower()
+
+    @field_validator('federated_top_k_per_source', 'federated_final_top_k', 'federated_max_chunks_per_document')
+    @classmethod
+    def validate_federated_limits(cls, v: int, info: Any) -> int:
+        """Validate federated retrieval limit values are positive and bounded."""
+        if v <= 0:
+            raise ValueError(f"{info.field_name} must be > 0, got {v}")
+        return v
 
 
 class LLMConfig(BaseModel):
@@ -249,6 +286,22 @@ class ContentResearchConfig(BaseModel):
         return v
 
 
+class SavedItemsConfig(BaseModel):
+    """Saved items (TheSource) index configuration for federated retrieval."""
+    enabled: bool = Field(default=False)
+    weight: float = Field(default=0.5)
+    shared_lancedb_path: Path = Field(default=Path.home() / "Projects" / "shared-data" / "lancedb")
+    table_name: str = Field(default="saved_items")
+
+    @field_validator('weight')
+    @classmethod
+    def validate_weight(cls, v: float) -> float:
+        """Validate weight is between 0 and 2."""
+        if not 0 <= v <= 2:
+            raise ValueError(f"weight must be between 0 and 2, got {v}")
+        return v
+
+
 class BooksConfig(BaseModel):
     """Books index configuration for EPUB and PDF files."""
     enabled: bool = Field(default=False)
@@ -339,6 +392,7 @@ class RAGConfig(BaseModel):
     books: BooksConfig = Field(default_factory=BooksConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     content_research: ContentResearchConfig = Field(default_factory=ContentResearchConfig)
+    saved_items: SavedItemsConfig = Field(default_factory=SavedItemsConfig)
     raptor: RaptorConfig = Field(default_factory=RaptorConfig)
 
     # Indexing options
@@ -427,7 +481,7 @@ def load_config() -> RAGConfig:
     return RAGConfig(
         vault_path=Path(vault_path),
         embedding=EmbeddingConfig(
-            model=os.getenv("EMBEDDING_MODEL", "voyage-3.5-lite"),
+            model=os.getenv("EMBEDDING_MODEL", "voyage-4-lite"),
             chunk_size=int(os.getenv("CHUNK_SIZE", "512")),
             chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "75")),
             batch_size=int(os.getenv("BATCH_SIZE", "100")),
@@ -443,7 +497,12 @@ def load_config() -> RAGConfig:
             vault_table=os.getenv("VAULT_TABLE", "obsidian_embeddings"),
             qdrant_host=os.getenv("QDRANT_HOST", "localhost"),
             qdrant_port=int(os.getenv("QDRANT_PORT", "6333")),
-            qdrant_collection=os.getenv("QDRANT_COLLECTION", "obsidian_notes")
+            qdrant_collection=os.getenv("QDRANT_COLLECTION", "obsidian_notes"),
+            hnsw_m=int(os.getenv("HNSW_M", "16")),
+            hnsw_ef_construction=int(os.getenv("HNSW_EF_CONSTRUCTION", "256")),
+            hnsw_ef_search=int(os.getenv("HNSW_EF_SEARCH", "128")),
+            enable_quantization=os.getenv("ENABLE_QUANTIZATION", "false").lower() == "true",
+            quantization_type=os.getenv("QUANTIZATION_TYPE", "int8"),
         ),
         graph_db=GraphDBConfig(
             enabled=os.getenv("ENABLE_GRAPH_SEARCH", "false").lower() == "true",
@@ -453,7 +512,8 @@ def load_config() -> RAGConfig:
         ),
         retrieval=RetrievalConfig(
             top_k=int(os.getenv("TOP_K", "75")),
-            rerank_top_n=int(os.getenv("RERANK_TOP_N", "100")),  # Let UI control final display count
+            retrieval_candidates=int(os.getenv("RETRIEVAL_CANDIDATES", "150")),
+            rerank_top_n=int(os.getenv("RERANK_TOP_N", "20")),
             reranker_model=os.getenv("RERANKER_MODEL", "rerank-2.5"),
             reranker_token_limit=int(os.getenv("RERANKER_TOKEN_LIMIT", "200000000")),
             enable_hybrid_search=os.getenv("ENABLE_HYBRID_SEARCH", "true").lower() == "true",
@@ -462,6 +522,12 @@ def load_config() -> RAGConfig:
             graph_retrieval_depth=int(os.getenv("GRAPH_RETRIEVAL_DEPTH", "1")),
             graph_retrieval_max_links=int(os.getenv("GRAPH_RETRIEVAL_MAX_LINKS", "3")),
             similarity_threshold=float(os.getenv("SIMILARITY_THRESHOLD", "0.3")),
+            validate_responses=os.getenv("VALIDATE_RESPONSES", "true").lower() == "true",
+            hyde_temperature=float(os.getenv("HYDE_TEMPERATURE", "0.7")),
+            enable_mmr=os.getenv("ENABLE_MMR", "false").lower() == "true",
+            mmr_lambda=float(os.getenv("MMR_LAMBDA", "0.5")),
+            max_chunks_per_document=int(os.getenv("MAX_CHUNKS_PER_DOCUMENT", "5")),
+            enable_evaluation_logging=os.getenv("ENABLE_EVALUATION_LOGGING", "false").lower() == "true",
             query_transform_method=os.getenv("QUERY_TRANSFORM_METHOD", "hyde"),
             query_transform_num_queries=int(os.getenv("QUERY_TRANSFORM_NUM_QUERIES", "3")),
             use_self_correction=os.getenv("USE_SELF_CORRECTION", "true").lower() == "true",
@@ -472,7 +538,10 @@ def load_config() -> RAGConfig:
             research_max_subqueries=int(os.getenv("RESEARCH_MAX_SUBQUERIES", "3")),
             research_max_synthesis_sources=int(os.getenv("RESEARCH_MAX_SYNTHESIS_SOURCES", "0")),  # 0 = unlimited
             enable_bilingual_expansion=os.getenv("ENABLE_BILINGUAL_EXPANSION", "false").lower() == "true",
-            expansion_languages=[lang.strip() for lang in os.getenv("EXPANSION_LANGUAGES", "el").split(",")]
+            expansion_languages=[lang.strip() for lang in os.getenv("EXPANSION_LANGUAGES", "el").split(",")],
+            federated_top_k_per_source=int(os.getenv("FEDERATED_TOP_K_PER_SOURCE", "100")),
+            federated_final_top_k=int(os.getenv("FEDERATED_FINAL_TOP_K", "120")),
+            federated_max_chunks_per_document=int(os.getenv("FEDERATED_MAX_CHUNKS_PER_DOCUMENT", "3"))
         ),
         llm=LLMConfig(
             model=os.getenv("LLM_MODEL", "gemini-3-flash-preview"),
@@ -518,11 +587,17 @@ def load_config() -> RAGConfig:
             book_respect_chapters=os.getenv("BOOK_RESPECT_CHAPTERS", "true").lower() == "true",
             book_respect_paragraphs=os.getenv("BOOK_RESPECT_PARAGRAPHS", "true").lower() == "true",
         ),
+        saved_items=SavedItemsConfig(
+            enabled=os.getenv("SAVED_ITEMS_ENABLED", "false").lower() == "true",
+            weight=float(os.getenv("SAVED_ITEMS_WEIGHT", "0.5")),
+            shared_lancedb_path=Path(os.getenv("SAVED_ITEMS_LANCEDB_PATH", str(Path.home() / "Projects" / "shared-data" / "lancedb"))),
+            table_name=os.getenv("SAVED_ITEMS_TABLE_NAME", "saved_items"),
+        ),
         raptor=RaptorConfig(
             enabled=os.getenv("ENABLE_RAPTOR", "false").lower() == "true",
             mode=os.getenv("RAPTOR_MODE", "collapsed"),
-            chunk_size=int(os.getenv("RAPTOR_CHUNK_SIZE", "400")),
-            chunk_overlap=int(os.getenv("RAPTOR_CHUNK_OVERLAP", "50")),
+            chunk_size=int(os.getenv("RAPTOR_CHUNK_SIZE", "1024")),
+            chunk_overlap=int(os.getenv("RAPTOR_CHUNK_OVERLAP", "100")),
             similarity_top_k=int(os.getenv("RAPTOR_TOP_K", "10")),
             raptor_path=Path(os.getenv("RAPTOR_PATH", "./data/raptor"))
         ),
