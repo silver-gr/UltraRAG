@@ -82,15 +82,27 @@ def _maybe_optimize_lancedb_index(db: Any, table_name: str, config: VectorDBConf
                     metric="cosine",
                     index_type="IVF_HNSW_SQ",
                     num_partitions=num_partitions,
+                    num_sub_vectors=96,
+                    m=config.hnsw_m,
+                    ef_construction=config.hnsw_ef_construction,
                 )
-            except (TypeError, ValueError):
-                # Fall back to basic IVF_FLAT if HNSW not supported
-                logger.info(f"IVF_HNSW_SQ not supported, falling back to IVF_FLAT")
-                table.create_index(
-                    metric="cosine",
-                    index_type="IVF_FLAT",
-                    num_partitions=num_partitions,
-                )
+            except (TypeError, ValueError) as hnsw_err:
+                # LanceDB may not support all HNSW params — try without them
+                logger.info(f"IVF_HNSW_SQ with HNSW params not supported ({hnsw_err}), retrying without")
+                try:
+                    table.create_index(
+                        metric="cosine",
+                        index_type="IVF_HNSW_SQ",
+                        num_partitions=num_partitions,
+                    )
+                except (TypeError, ValueError):
+                    # Fall back to basic IVF_FLAT if HNSW not supported at all
+                    logger.info("IVF_HNSW_SQ not supported, falling back to IVF_FLAT")
+                    table.create_index(
+                        metric="cosine",
+                        index_type="IVF_FLAT",
+                        num_partitions=num_partitions,
+                    )
 
         logger.info(f"LanceDB index created on {table_name} ({row_count} rows)")
 

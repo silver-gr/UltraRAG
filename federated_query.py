@@ -179,7 +179,8 @@ class FederatedRetriever(BaseRetriever):
                         base_retriever=retriever,
                         query_transformer=self.query_transformer,
                         transform_method=self.config.retrieval.query_transform_method,
-                        num_queries=self.config.retrieval.query_transform_num_queries
+                        num_queries=self.config.retrieval.query_transform_num_queries,
+                        rrf_k=self.config.retrieval.rrf_k,
                     )
                 self.retrievers[source.name] = retriever
                 logger.info(f"Using custom retriever for source: {source.name} (type: {source.source_type})")
@@ -398,6 +399,7 @@ class FederatedQueryEngine:
         use_cache: bool = True,
         source_filter: Optional[List[str]] = None,
         book_filter=None,
+        metadata_filter=None,
     ):
         """
         Initialize federated query engine.
@@ -411,6 +413,7 @@ class FederatedQueryEngine:
             use_cache: Whether to cache queries
             source_filter: Optional list of source names to query (None = all)
             book_filter: Optional BookFilter for category/author filtering on books
+            metadata_filter: Optional MetadataFilter for query-time filtering
         """
         self.sources = sources
         self.config = config
@@ -420,6 +423,7 @@ class FederatedQueryEngine:
         self.query_cache = LRUCache(max_size=cache_size) if use_cache else None
         self.source_filter = source_filter
         self._book_filter = book_filter
+        self._metadata_filter = metadata_filter
 
         # Filter sources if specified
         if source_filter:
@@ -462,6 +466,19 @@ class FederatedQueryEngine:
         # Post-processors
         node_postprocessors = []
 
+        # Metadata filter FIRST (reduces reranker workload)
+        if self._metadata_filter:
+            from query_engine import MetadataFilterPostprocessor
+            node_postprocessors.append(
+                MetadataFilterPostprocessor(
+                    filter_tags=self._metadata_filter.tags,
+                    filter_date_after=self._metadata_filter.date_after,
+                    filter_date_before=self._metadata_filter.date_before,
+                    filter_path_prefix=self._metadata_filter.path_prefix,
+                )
+            )
+            logger.info("Metadata filter enabled for federated engine")
+
         if self.reranker:
             node_postprocessors.append(self.reranker)
             logger.info("Reranker enabled for federated engine")
@@ -473,6 +490,15 @@ class FederatedQueryEngine:
                     similarity_cutoff=self.config.retrieval.similarity_threshold
                 )
             )
+
+        # Post-rerank score threshold (separate scale from cosine similarity)
+        if self.reranker and self.config.retrieval.rerank_score_threshold > 0:
+            node_postprocessors.append(
+                SimilarityPostprocessor(
+                    similarity_cutoff=self.config.retrieval.rerank_score_threshold
+                )
+            )
+            logger.info(f"Post-rerank threshold: {self.config.retrieval.rerank_score_threshold}")
 
         # Response synthesizer with dynamic prompt based on active sources
         source_types = [s.source_type for s in self.active_sources]

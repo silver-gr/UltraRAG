@@ -30,17 +30,17 @@ class TestQuery:
         """
         from models import QueryResult
 
-        with patch('retrieval.get_llm', return_value=mock_llm):
+        mock_engine = MagicMock()
+        mock_response = MagicMock()
+        mock_response.response = "Test answer about RAG"
+        mock_response.source_nodes = []
+        mock_response.metadata = {}
+        mock_engine.query.return_value = mock_response
+
+        with patch('retrieval._build_query_engine', return_value=mock_engine):
             from retrieval import query
 
-            # Create minimal mock index
             mock_index = MagicMock()
-            mock_response = MagicMock()
-            mock_response.response = "Test answer about RAG"
-            mock_response.source_nodes = []
-            mock_response.metadata = {}
-            mock_index.as_query_engine.return_value.query.return_value = mock_response
-
             result = query("What is RAG?", mock_index, mode="simple")
 
             assert isinstance(result, QueryResult)
@@ -70,16 +70,17 @@ class TestQuery:
         """
         from models import QueryResult
 
-        with patch('retrieval.get_llm', return_value=mock_llm):
+        mock_engine = MagicMock()
+        mock_response = MagicMock()
+        mock_response.response = "Simple response"
+        mock_response.source_nodes = []
+        mock_response.metadata = {}
+        mock_engine.query.return_value = mock_response
+
+        with patch('retrieval._build_query_engine', return_value=mock_engine):
             from retrieval import query
 
             mock_index = MagicMock()
-            mock_response = MagicMock()
-            mock_response.response = "Simple response"
-            mock_response.source_nodes = []
-            mock_response.metadata = {}
-            mock_index.as_query_engine.return_value.query.return_value = mock_response
-
             result = query("test", mock_index, mode="simple")
 
             assert result.mode == "simple"
@@ -98,8 +99,14 @@ class TestFederatedQuery:
         from models import QueryResult, IndexSource, SourceType
 
         with patch('retrieval.get_llm', return_value=mock_llm):
-            with patch('retrieval._federated_retrieve') as mock_retrieve:
-                mock_retrieve.return_value = []
+            # Mock FederatedQueryEngine since federated_query now delegates to it
+            mock_response = MagicMock()
+            mock_response.response = "test answer"
+            mock_response.source_nodes = []
+            mock_response.metadata = {}
+
+            with patch('federated_query.FederatedQueryEngine') as MockEngine:
+                MockEngine.return_value.query.return_value = mock_response
 
                 from retrieval import federated_query
 

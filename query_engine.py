@@ -119,6 +119,102 @@ class DocumentDiversityPostprocessor(BaseNodePostprocessor):
         return filtered
 
 
+class ContextualCompressionPostprocessor(BaseNodePostprocessor):
+    """Extract only the most relevant sentences from each chunk.
+
+    Reduces token usage in synthesis by compressing chunks to the sentences
+    that actually answer the query.  Insert after reranker, before source numbering.
+    """
+
+    max_sentences: int = 5
+
+    def _postprocess_nodes(
+        self, nodes: List[NodeWithScore], query_bundle: Optional[QueryBundle] = None
+    ) -> List[NodeWithScore]:
+        if not query_bundle:
+            return nodes
+        query_lower = query_bundle.query_str.lower()
+        query_terms = set(query_lower.split())
+
+        for node_ws in nodes:
+            text = node_ws.node.text or ""
+            # Preserve original before compression
+            if '_original_text' not in node_ws.node.metadata:
+                node_ws.node.metadata['_original_text'] = text
+
+            sentences = [s.strip() for s in text.replace('\n', '. ').split('. ') if s.strip()]
+            if len(sentences) <= self.max_sentences:
+                continue
+
+            # Score each sentence by term overlap
+            scored = []
+            for s in sentences:
+                s_lower = s.lower()
+                overlap = sum(1 for t in query_terms if t in s_lower)
+                scored.append((overlap, s))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            top = scored[:self.max_sentences]
+            # Restore original order
+            top_sentences = [s for _, s in sorted(
+                top, key=lambda x: sentences.index(x[1])
+            )]
+            node_ws.node.text = '. '.join(top_sentences)
+
+        return nodes
+
+
+class MetadataFilterPostprocessor(BaseNodePostprocessor):
+    """Filter nodes by metadata (tags, dates, path prefix) at query time.
+
+    Insert BEFORE reranker so filtered nodes don't consume rerank budget.
+    """
+
+    filter_tags: Optional[List[str]] = None
+    filter_date_after: Optional[str] = None
+    filter_date_before: Optional[str] = None
+    filter_path_prefix: Optional[str] = None
+
+    def _postprocess_nodes(
+        self, nodes: List[NodeWithScore], query_bundle: Optional[QueryBundle] = None
+    ) -> List[NodeWithScore]:
+        if not any([self.filter_tags, self.filter_date_after, self.filter_date_before, self.filter_path_prefix]):
+            return nodes
+
+        filtered = []
+        for nws in nodes:
+            md = nws.node.metadata or {}
+
+            # Tag filter (OR semantics: match any tag)
+            if self.filter_tags:
+                node_tags = md.get('tags', [])
+                if isinstance(node_tags, str):
+                    node_tags = [t.strip() for t in node_tags.split(',')]
+                if not any(t.lower() in [nt.lower() for nt in node_tags] for t in self.filter_tags):
+                    continue
+
+            # Path prefix filter
+            if self.filter_path_prefix:
+                file_path = md.get('file_path', '')
+                if not file_path.startswith(self.filter_path_prefix):
+                    continue
+
+            # Date filters (ISO format comparison)
+            if self.filter_date_after or self.filter_date_before:
+                date_str = md.get('created_date') or md.get('modified_date') or ''
+                if isinstance(date_str, str) and date_str:
+                    date_val = date_str[:10]  # YYYY-MM-DD
+                    if self.filter_date_after and date_val < self.filter_date_after:
+                        continue
+                    if self.filter_date_before and date_val > self.filter_date_before:
+                        continue
+
+            filtered.append(nws)
+
+        if len(filtered) < len(nodes):
+            logger.info(f"MetadataFilter: {len(nodes)} -> {len(filtered)} nodes")
+        return filtered
+
+
 # Import additional dependencies for caching
 import hashlib
 from typing import Any
@@ -379,7 +475,8 @@ class QueryTransformRetriever(BaseRetriever):
         transform_method: str = "hyde",
         num_queries: int = 3,
         enable_bilingual: bool = False,
-        bilingual_languages: List[str] = None
+        bilingual_languages: List[str] = None,
+        rrf_k: int = 60,
     ):
         """
         Initialize query transform retriever.
@@ -391,18 +488,47 @@ class QueryTransformRetriever(BaseRetriever):
             num_queries: Number of query variations for multi-query
             enable_bilingual: Whether to enable bilingual query expansion
             bilingual_languages: List of language codes for bilingual expansion (e.g., ["el"])
+            rrf_k: RRF constant for reciprocal rank fusion (default: 60)
         """
         self.base_retriever = base_retriever
         self.query_transformer = query_transformer
         self.transform_method = transform_method.lower()
         self.num_queries = num_queries
         self.enable_bilingual = enable_bilingual
+        self.rrf_k = rrf_k
+        self.enable_decomposition = False  # Set externally via config
         self.bilingual_languages = bilingual_languages or ["el"]
         super().__init__()
 
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         """Retrieve nodes with query transformation."""
         original_query = query_bundle.query_str
+
+        # Query decomposition: split complex queries and merge with RRF
+        if (self.enable_decomposition and self.query_transformer is not None
+                and hasattr(self.query_transformer, 'decompose_query')):
+            sub_queries = self.query_transformer.decompose_query(original_query)
+            if len(sub_queries) >= 2:
+                logger.info(f"Query decomposed into {len(sub_queries)} sub-queries")
+                RRF_K = self.rrf_k
+                rrf_scores: Dict[str, float] = {}
+                node_map: Dict[str, NodeWithScore] = {}
+                for sq in sub_queries:
+                    sq_bundle = QueryBundle(query_str=sq)
+                    # Recurse without decomposition to avoid infinite loop
+                    self.enable_decomposition = False
+                    sq_nodes = self._retrieve(sq_bundle)
+                    self.enable_decomposition = True
+                    for rank, node in enumerate(sq_nodes):
+                        node_id = node.node.node_id
+                        rrf_scores[node_id] = rrf_scores.get(node_id, 0) + 1.0 / (RRF_K + rank + 1)
+                        if node_id not in node_map or (node.score or 0) > (node_map[node_id].score or 0):
+                            node_map[node_id] = node
+                for node_id, rrf_score in rrf_scores.items():
+                    node_map[node_id].score = rrf_score
+                combined = sorted(node_map.values(), key=lambda n: n.score or 0, reverse=True)
+                logger.info(f"Decomposition RRF: {len(combined)} unique nodes from {len(sub_queries)} sub-queries")
+                return combined
 
         # If no transformer or method is 'none'/'disabled', use base retriever
         if self.query_transformer is None or self.transform_method in ["none", "disabled"]:
@@ -447,7 +573,7 @@ class QueryTransformRetriever(BaseRetriever):
             logger.info(f"Generated {len(query_variations)} query variations")
 
             # Retrieve with each variation using Reciprocal Rank Fusion
-            RRF_K = 60  # Standard RRF constant
+            RRF_K = self.rrf_k
             rrf_scores: Dict[str, float] = {}
             node_map: Dict[str, NodeWithScore] = {}
 
@@ -485,7 +611,7 @@ class QueryTransformRetriever(BaseRetriever):
             logger.info(f"Generated {len(query_variations)} query variations for HyDE transformation")
 
             # Generate hypothetical document for each variation using RRF
-            RRF_K = 60
+            RRF_K = self.rrf_k
             rrf_scores: Dict[str, float] = {}
             node_map: Dict[str, NodeWithScore] = {}
 
@@ -547,7 +673,7 @@ class QueryTransformRetriever(BaseRetriever):
         logger.info(f"Generated {len(query_variations)} bilingual query variations")
 
         # Retrieve with each query variation using RRF
-        RRF_K = 60
+        RRF_K = self.rrf_k
         rrf_scores: Dict[str, float] = {}
         node_map: Dict[str, NodeWithScore] = {}
 
@@ -590,7 +716,7 @@ class QueryTransformRetriever(BaseRetriever):
         bilingual_nodes = self._retrieve_with_bilingual(original_query)
 
         # Merge using RRF: treat primary results as one ranked list, bilingual as another
-        RRF_K = 60
+        RRF_K = self.rrf_k
         rrf_scores: Dict[str, float] = {}
         node_map: Dict[str, NodeWithScore] = {}
 
@@ -625,6 +751,7 @@ class RAGQueryEngine:
         config: RAGConfig,
         reranker=None,
         query_transformer: Optional[QueryTransformer] = None,
+        metadata_filter=None,
         cache_size: int = 100,
         use_cache: bool = True
     ):
@@ -636,6 +763,7 @@ class RAGQueryEngine:
             config: RAG configuration
             reranker: Optional reranker model
             query_transformer: Optional query transformer for HyDE/multi-query
+            metadata_filter: Optional MetadataFilter for query-time filtering
             cache_size: Size of LRU cache for query results (default: 100)
             use_cache: Whether to enable query caching (default: True)
         """
@@ -643,6 +771,7 @@ class RAGQueryEngine:
         self.config = config
         self.reranker = reranker
         self.query_transformer = query_transformer
+        self.metadata_filter = metadata_filter
         self.use_cache = use_cache
         self.query_cache = LRUCache(max_size=cache_size) if use_cache else None
         self.query_engine = self._build_query_engine()
@@ -667,8 +796,10 @@ class RAGQueryEngine:
                 transform_method=self.config.retrieval.query_transform_method,
                 num_queries=self.config.retrieval.query_transform_num_queries,
                 enable_bilingual=self.config.retrieval.enable_bilingual_expansion,
-                bilingual_languages=self.config.retrieval.expansion_languages
+                bilingual_languages=self.config.retrieval.expansion_languages,
+                rrf_k=self.config.retrieval.rrf_k,
             )
+            retriever.enable_decomposition = self.config.retrieval.enable_query_decomposition
         elif self.query_transformer and self.config.retrieval.enable_bilingual_expansion:
             # Bilingual expansion can work even without other transformations
             logger.info(f"Bilingual expansion enabled (standalone) for: {self.config.retrieval.expansion_languages}")
@@ -677,7 +808,8 @@ class RAGQueryEngine:
                 query_transformer=self.query_transformer,
                 transform_method="none",
                 enable_bilingual=True,
-                bilingual_languages=self.config.retrieval.expansion_languages
+                bilingual_languages=self.config.retrieval.expansion_languages,
+                rrf_k=self.config.retrieval.rrf_k,
             )
         else:
             logger.info("Query transformation disabled")
@@ -699,6 +831,18 @@ class RAGQueryEngine:
         # Configure post-processors
         node_postprocessors = []
 
+        # Metadata filter FIRST (reduces reranker workload)
+        if self.metadata_filter:
+            node_postprocessors.append(
+                MetadataFilterPostprocessor(
+                    filter_tags=self.metadata_filter.tags,
+                    filter_date_after=self.metadata_filter.date_after,
+                    filter_date_before=self.metadata_filter.date_before,
+                    filter_path_prefix=self.metadata_filter.path_prefix,
+                )
+            )
+            logger.info("Metadata filter enabled")
+
         # Add reranker if available
         if self.reranker:
             node_postprocessors.append(self.reranker)
@@ -712,12 +856,27 @@ class RAGQueryEngine:
             )
             logger.info(f"MMR diversity enabled: max {self.config.retrieval.max_chunks_per_document} chunks/doc")
 
-        # Add similarity filter
-        node_postprocessors.append(
-            SimilarityPostprocessor(
-                similarity_cutoff=self.config.retrieval.similarity_threshold
+        # Add similarity filter (skip when reranker handles relevance)
+        if self.config.retrieval.similarity_threshold > 0 and not self.reranker:
+            node_postprocessors.append(
+                SimilarityPostprocessor(
+                    similarity_cutoff=self.config.retrieval.similarity_threshold
+                )
             )
-        )
+
+        # Post-rerank score threshold (separate scale from cosine similarity)
+        if self.reranker and self.config.retrieval.rerank_score_threshold > 0:
+            node_postprocessors.append(
+                SimilarityPostprocessor(
+                    similarity_cutoff=self.config.retrieval.rerank_score_threshold
+                )
+            )
+            logger.info(f"Post-rerank threshold: {self.config.retrieval.rerank_score_threshold}")
+
+        # Contextual compression (extract relevant sentences post-rerank)
+        if self.config.retrieval.enable_contextual_compression:
+            node_postprocessors.append(ContextualCompressionPostprocessor())
+            logger.info("Contextual compression enabled")
 
         # Add source numbering LAST so [1], [2], [3]... match final node order
         # This ensures LLM citations correspond to actual source positions
@@ -742,7 +901,7 @@ class RAGQueryEngine:
         )
 
         # Setup Self-RAG response validator if enabled
-        if self.config.retrieval.validate_responses and self.config.retrieval.use_self_correction:
+        if self.config.retrieval.validate_responses:
             from self_correction import SelfRAGValidator
             from llama_index.core import Settings
             self._validator = SelfRAGValidator(Settings.llm)
@@ -849,6 +1008,7 @@ class HybridQueryEngine:
         nodes: Optional[List] = None,
         wikilink_graph: Optional[Dict[str, List[str]]] = None,
         query_transformer: Optional[QueryTransformer] = None,
+        metadata_filter=None,
         cache_size: int = 100,
         use_cache: bool = True
     ):
@@ -863,6 +1023,7 @@ class HybridQueryEngine:
             nodes: Document nodes for building BM25 retriever if not provided
             wikilink_graph: Optional wikilink graph for graph-enhanced retrieval
             query_transformer: Optional query transformer for HyDE/multi-query
+            metadata_filter: Optional MetadataFilter for query-time filtering
             cache_size: Size of LRU cache for query results (default: 100)
             use_cache: Whether to enable query caching (default: True)
         """
@@ -873,6 +1034,7 @@ class HybridQueryEngine:
         self.nodes = nodes
         self.wikilink_graph = wikilink_graph or {}
         self.query_transformer = query_transformer
+        self.metadata_filter = metadata_filter
         self.use_cache = use_cache
         self.query_cache = LRUCache(max_size=cache_size) if use_cache else None
 
@@ -956,8 +1118,10 @@ class HybridQueryEngine:
                 transform_method=self.config.retrieval.query_transform_method,
                 num_queries=self.config.retrieval.query_transform_num_queries,
                 enable_bilingual=self.config.retrieval.enable_bilingual_expansion,
-                bilingual_languages=self.config.retrieval.expansion_languages
+                bilingual_languages=self.config.retrieval.expansion_languages,
+                rrf_k=self.config.retrieval.rrf_k,
             )
+            retriever.enable_decomposition = self.config.retrieval.enable_query_decomposition
         elif self.query_transformer and self.config.retrieval.enable_bilingual_expansion:
             # Bilingual expansion can work even without other transformations
             logger.info(f"Bilingual expansion enabled (standalone) for: {self.config.retrieval.expansion_languages}")
@@ -966,7 +1130,8 @@ class HybridQueryEngine:
                 query_transformer=self.query_transformer,
                 transform_method="none",
                 enable_bilingual=True,
-                bilingual_languages=self.config.retrieval.expansion_languages
+                bilingual_languages=self.config.retrieval.expansion_languages,
+                rrf_k=self.config.retrieval.rrf_k,
             )
         else:
             logger.info("Query transformation disabled")
@@ -987,6 +1152,18 @@ class HybridQueryEngine:
 
         # Configure post-processors
         node_postprocessors = []
+
+        # Metadata filter FIRST (reduces reranker workload)
+        if self.metadata_filter:
+            node_postprocessors.append(
+                MetadataFilterPostprocessor(
+                    filter_tags=self.metadata_filter.tags,
+                    filter_date_after=self.metadata_filter.date_after,
+                    filter_date_before=self.metadata_filter.date_before,
+                    filter_path_prefix=self.metadata_filter.path_prefix,
+                )
+            )
+            logger.info("Metadata filter enabled")
 
         # Add reranker if available
         if self.reranker:
@@ -1016,6 +1193,20 @@ class HybridQueryEngine:
         else:
             logger.info("Similarity filter disabled (reranker handles relevance)")
 
+        # Post-rerank score threshold (separate scale from cosine similarity)
+        if self.reranker and self.config.retrieval.rerank_score_threshold > 0:
+            node_postprocessors.append(
+                SimilarityPostprocessor(
+                    similarity_cutoff=self.config.retrieval.rerank_score_threshold
+                )
+            )
+            logger.info(f"Post-rerank threshold: {self.config.retrieval.rerank_score_threshold}")
+
+        # Contextual compression (extract relevant sentences post-rerank)
+        if self.config.retrieval.enable_contextual_compression:
+            node_postprocessors.append(ContextualCompressionPostprocessor())
+            logger.info("Contextual compression enabled")
+
         # Add source numbering LAST so [1], [2], [3]... match final node order
         node_postprocessors.append(SourceNumberingPostprocessor())
 
@@ -1038,7 +1229,7 @@ class HybridQueryEngine:
         )
 
         # Setup Self-RAG response validator if enabled
-        if self.config.retrieval.validate_responses and self.config.retrieval.use_self_correction:
+        if self.config.retrieval.validate_responses:
             from self_correction import SelfRAGValidator
             from llama_index.core import Settings
             self._validator = SelfRAGValidator(Settings.llm)

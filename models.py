@@ -114,6 +114,15 @@ class SourceNode:
 
 
 @dataclass
+class MetadataFilter:
+    """Filter for query-time metadata filtering."""
+    tags: list[str] | None = None
+    date_after: str | None = None  # ISO format: "2025-01-01"
+    date_before: str | None = None
+    path_prefix: str | None = None
+
+
+@dataclass
 class QueryResult:
     """Result from a query operation."""
     answer: str
@@ -122,6 +131,10 @@ class QueryResult:
     exec_time: float
     query: str = ""
     mode: str = "hybrid"
+    confidence: float | None = None
+    relevance_grade: str | None = None  # CORRECT / AMBIGUOUS / INCORRECT
+    validation_result: str | None = None  # From SelfRAGValidator
+    timings: dict[str, float] = field(default_factory=dict)  # stage -> ms
 
 
 @dataclass

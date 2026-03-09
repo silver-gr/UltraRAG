@@ -265,7 +265,8 @@ class ResearchRetriever:
         max_subqueries: int = 3,
         enable_research: bool = True,
         convergence_config: ConvergenceConfig = None,
-        index_profile: IndexProfile = None
+        index_profile: IndexProfile = None,
+        gap_analysis_top_n: int = 40,
     ):
         """Initialize research retriever.
 
@@ -278,6 +279,7 @@ class ResearchRetriever:
             enable_research: Whether research mode is enabled (default: True)
             convergence_config: Custom convergence settings (optional)
             index_profile: Use preset profile (PERSONAL, RESEARCH, BALANCED)
+            gap_analysis_top_n: Number of nodes visible to gap analysis (default: 40)
         """
         # Determine convergence config
         if convergence_config:
@@ -293,6 +295,7 @@ class ResearchRetriever:
         self.confidence_threshold = confidence_threshold
         self.max_subqueries = max_subqueries
         self.enable_research = enable_research
+        self.gap_analysis_top_n = gap_analysis_top_n
 
         # Context cache for reducing cost on repeated LLM calls
         self._context_cache = None
@@ -837,9 +840,8 @@ class ResearchRetriever:
             return "No relevant information found", 0.0, None
 
         # Build context from top nodes for gap analysis
-        # 20 nodes gives good coverage without excessive token usage
         context_chunks = []
-        for idx, node in enumerate(nodes[:20], 1):  # Analyze top 20 nodes
+        for idx, node in enumerate(nodes[:self.gap_analysis_top_n], 1):
             title = node.metadata.get('title', 'Unknown')
             file_path = node.metadata.get('file_path', '')
             context_chunks.append(f"[Source {idx}: {title}]\nPath: {file_path}\n{node.node.text}")

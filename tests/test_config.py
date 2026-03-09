@@ -193,6 +193,12 @@ class TestRetrievalConfig:
         assert config.enable_mmr is False
         assert config.max_chunks_per_document == 5
         assert config.enable_evaluation_logging is False
+        assert config.rerank_score_threshold == 0.0
+        assert config.enable_query_decomposition is False
+        assert config.enable_contextual_compression is False
+        assert config.rrf_k == 60
+        assert config.fusion_vector_weight == 1.0
+        assert config.fusion_bm25_weight == 1.0
 
 
 class TestRAGConfig:

@@ -200,10 +200,13 @@ class BookRaptorManager:
         nodes = retriever.retrieve(query)
 
         # Synthesize answer
-        from retrieval import get_llm, synthesize_answer, extract_sources
+        from retrieval import get_llm, extract_sources
+        from llama_index.core.response_synthesizers import get_response_synthesizer
 
         llm = get_llm(config)
-        answer = synthesize_answer(query, nodes, llm)
+        synth = get_response_synthesizer(response_mode="compact")
+        response = synth.synthesize(query, nodes)
+        answer = str(response) if response else "No relevant information found."
         sources = extract_sources(nodes)
 
         return QueryResult(

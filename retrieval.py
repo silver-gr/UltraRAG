@@ -20,7 +20,7 @@ from config import RAGConfig, load_config
 from models import (
     QueryResult, ResearchResult, SourceNode, IndexSource, SourceType,
     IndexNotFoundError, LLMRateLimitError,
-    QueryMode, SourceFilter, BookFilter,
+    QueryMode, SourceFilter, BookFilter, MetadataFilter,
 )
 
 logger = logging.getLogger("ultrarag.retrieval")
@@ -33,6 +33,7 @@ def query(
     index: VectorStoreIndex | None,
     config: RAGConfig | None = None,
     mode: QueryMode = "hybrid",
+    metadata_filter: MetadataFilter | None = None,
 ) -> QueryResult:
     """
     Execute query against an index.
@@ -61,16 +62,33 @@ def query(
 
     config = config or load_config()
     start_time = time.time()
+    timings: dict[str, float] = {}
 
     try:
         # Build appropriate query engine
-        engine = _build_query_engine(index, config, mode)
+        t0 = time.time()
+        engine = _build_query_engine(index, config, mode, metadata_filter=metadata_filter)
+        timings["engine_build_ms"] = round((time.time() - t0) * 1000, 1)
 
         # Execute query
+        t0 = time.time()
         response = engine.query(query_str)
+        timings["query_ms"] = round((time.time() - t0) * 1000, 1)
+
+        # Extract structured confidence from response metadata
+        metadata = getattr(response, 'metadata', None) or {}
+        validation_result = metadata.get('validation_warning')
+        relevance_grade = metadata.get('relevance_grade')
 
         # Convert to QueryResult
-        sources = extract_sources(getattr(response, 'source_nodes', []))
+        source_nodes = getattr(response, 'source_nodes', [])
+        sources = extract_sources(source_nodes)
+
+        # Compute confidence from source scores (normalized to 0-1)
+        confidence = _compute_confidence(source_nodes)
+
+        total_ms = round((time.time() - start_time) * 1000, 1)
+        timings["total_ms"] = total_ms
 
         return QueryResult(
             answer=str(response.response) if hasattr(response, 'response') else str(response),
@@ -79,6 +97,10 @@ def query(
             exec_time=time.time() - start_time,
             query=query_str,
             mode=mode,
+            confidence=confidence,
+            validation_result=validation_result,
+            relevance_grade=relevance_grade,
+            timings=timings,
         )
 
     except Exception as e:
@@ -94,16 +116,20 @@ def federated_query(
     mode: QueryMode = "hybrid",
     source_filter: SourceFilter = None,
     book_filter: "BookFilter | None" = None,
+    metadata_filter: MetadataFilter | None = None,
 ) -> QueryResult:
     """
-    Query multiple indexes with weighted merging.
+    Query multiple indexes with reranking, BM25, self-correction, and proper synthesis.
+
+    Delegates to FederatedQueryEngine which handles all retrieval features consistently.
 
     Args:
         query_str: The query to execute
-        indexes: Dict of name -> IndexSource
+        indexes: Dict of name -> IndexSource (models.IndexSource)
         config: Optional config
         mode: Query mode
         source_filter: Limit to specific source (vault, conversations, etc)
+        book_filter: Optional BookFilter for book category/author filtering
 
     Returns:
         QueryResult with merged results from all sources
@@ -117,23 +143,54 @@ def federated_query(
 
     config = config or load_config()
     start_time = time.time()
+    timings: dict[str, float] = {}
 
-    # Retrieve from all sources
-    all_nodes = _federated_retrieve(query_str, indexes, config, source_filter, book_filter)
+    from federated_query import FederatedQueryEngine
+    from federated_query import IndexSource as FedIndexSource
 
-    # Synthesize answer
-    llm = get_llm(config)
-    answer = synthesize_answer(query_str, all_nodes, llm)
+    # Convert models.IndexSource -> federated_query.IndexSource
+    fed_sources = []
+    for name, src in indexes.items():
+        if source_filter and source_filter != "all" and src.source_type.value != source_filter:
+            continue
+        fed_sources.append(FedIndexSource(
+            name=src.name,
+            source_type=src.source_type.value,
+            index=src.index,
+            weight=src.weight,
+            nodes=src.nodes,
+            wikilink_graph=src.wikilink_graph,
+        ))
 
-    sources = extract_sources(all_nodes)
+    if not fed_sources:
+        raise IndexNotFoundError("federated")
+
+    t0 = time.time()
+    engine = FederatedQueryEngine(
+        sources=fed_sources, config=config, book_filter=book_filter,
+        metadata_filter=metadata_filter,
+    )
+    timings["engine_build_ms"] = round((time.time() - t0) * 1000, 1)
+
+    t0 = time.time()
+    response = engine.query(query_str)
+    timings["query_ms"] = round((time.time() - t0) * 1000, 1)
+
+    source_nodes = getattr(response, 'source_nodes', [])
+    confidence = _compute_confidence(source_nodes)
+
+    total_ms = round((time.time() - start_time) * 1000, 1)
+    timings["total_ms"] = total_ms
 
     return QueryResult(
-        answer=answer,
-        sources=sources,
-        tokens_used=0,  # TODO: track tokens
+        answer=str(response.response) if hasattr(response, 'response') else str(response),
+        sources=extract_sources(source_nodes),
+        tokens_used=_get_tokens_used(response),
         exec_time=time.time() - start_time,
         query=query_str,
         mode=mode,
+        confidence=confidence,
+        timings=timings,
     )
 
 
@@ -187,23 +244,39 @@ def research(
 
 # === INTERNAL HELPERS ===
 
-def _build_query_engine(index: VectorStoreIndex, config: RAGConfig, mode: str):
-    """Build appropriate query engine based on mode."""
-    llm = get_llm(config)
+def _build_query_engine(index: VectorStoreIndex, config: RAGConfig, mode: str, metadata_filter=None):
+    """Build appropriate query engine based on mode.
+
+    Uses the same RAGQueryEngine/HybridQueryEngine as the web UI and interactive CLI,
+    ensuring consistent reranking, BM25, postprocessors, and query transformation.
+    """
+    from query_engine import RAGQueryEngine, HybridQueryEngine
 
     if mode == "simple":
-        # Simple vector retrieval
-        return index.as_query_engine(
-            llm=llm,
-            similarity_top_k=config.retrieval.top_k,
-        )
+        return RAGQueryEngine(index, config, metadata_filter=metadata_filter)
     else:
-        # Hybrid retrieval (vector + BM25)
-        # For now, use simple as fallback - hybrid requires docstore
-        return index.as_query_engine(
-            llm=llm,
-            similarity_top_k=config.retrieval.top_k,
-        )
+        return HybridQueryEngine(index, config, metadata_filter=metadata_filter)
+
+
+def _compute_confidence(source_nodes) -> float | None:
+    """Compute confidence from source node scores, normalized to 0-1.
+
+    Uses average of top-N scores. Reranker scores are typically 0-1 already;
+    raw cosine similarity may need clamping.
+    """
+    if not source_nodes:
+        return None
+
+    scores = [n.score for n in source_nodes if hasattr(n, 'score') and n.score is not None]
+    if not scores:
+        return None
+
+    # Use top 5 scores for confidence (most relevant results)
+    top_scores = sorted(scores, reverse=True)[:5]
+    avg = sum(top_scores) / len(top_scores)
+
+    # Clamp to 0-1 range
+    return round(max(0.0, min(1.0, avg)), 4)
 
 
 def get_llm(config: RAGConfig):
@@ -222,133 +295,6 @@ def get_llm(config: RAGConfig):
         logger.warning(f"Failed to get LLM: {e}, using default")
         from llama_index.llms.google_genai import GoogleGenAI
         return GoogleGenAI(model=config.llm.model)
-
-
-def _federated_retrieve(
-    query_str: str,
-    indexes: dict[str, IndexSource],
-    config: RAGConfig,
-    source_filter: SourceFilter = None,
-    book_filter: BookFilter | None = None,
-) -> list:
-    """Retrieve from multiple indexes and merge with guaranteed source diversity.
-
-    Uses reserved-slot strategy: each source gets a minimum number of slots
-    proportional to its presence, ensuring non-primary sources aren't squeezed
-    out by score dominance from a single source.
-    """
-    per_source_nodes: dict[str, list] = {}
-    active_sources = []
-
-    for name, source in indexes.items():
-        if source_filter and source_filter != "all" and source.source_type.value != source_filter:
-            continue
-
-        active_sources.append(name)
-        try:
-            if source.source_type.value == "books" and book_filter:
-                from books_retriever import get_books_retriever
-                retriever = get_books_retriever(source.index, config.retrieval.top_k, book_filter)
-            else:
-                retriever = source.index.as_retriever(similarity_top_k=config.retrieval.top_k)
-            nodes = retriever.retrieve(query_str)
-
-            # Tag each node with its source name for tracking
-            for node in nodes:
-                if hasattr(node, 'score') and node.score is not None:
-                    node.score *= source.weight
-                if hasattr(node, 'node') and hasattr(node.node, 'metadata'):
-                    node.node.metadata['_federation_source'] = name
-
-            per_source_nodes[name] = sorted(
-                nodes, key=lambda n: getattr(n, 'score', 0) or 0, reverse=True
-            )
-        except Exception as e:
-            logger.warning(f"Failed to retrieve from {name}: {e}")
-
-    total_limit = config.retrieval.rerank_top_n
-    num_sources = len(per_source_nodes)
-
-    # Single source or no results — no diversity needed
-    if num_sources <= 1:
-        all_nodes = []
-        for nodes in per_source_nodes.values():
-            all_nodes.extend(nodes)
-        all_nodes.sort(key=lambda n: getattr(n, 'score', 0) or 0, reverse=True)
-        return all_nodes[:total_limit]
-
-    # Multi-source: reserve minimum slots per non-primary source
-    # Primary source (highest weight) gets remaining slots after reservations
-    # Reserve 15% of total per non-primary source (min 10, max 50)
-    reserve_per_source = max(10, min(50, int(total_limit * 0.15)))
-
-    # Phase 1: Fill reserved slots for each source (top-N from each)
-    reserved: dict[str, list] = {}
-    used_ids: set = set()
-    for name, nodes in per_source_nodes.items():
-        reserved[name] = []
-        for node in nodes[:reserve_per_source]:
-            node_id = id(node)
-            if node_id not in used_ids:
-                reserved[name].append(node)
-                used_ids.add(node_id)
-
-    # Phase 2: Fill remaining slots by global score ranking
-    remaining_slots = total_limit - sum(len(v) for v in reserved.values())
-    overflow = []
-    for name, nodes in per_source_nodes.items():
-        for node in nodes:
-            if id(node) not in used_ids:
-                overflow.append(node)
-    overflow.sort(key=lambda n: getattr(n, 'score', 0) or 0, reverse=True)
-
-    # Combine: reserved slots + best remaining
-    all_nodes = []
-    for nodes in reserved.values():
-        all_nodes.extend(nodes)
-    all_nodes.extend(overflow[:max(0, remaining_slots)])
-
-    # Final sort by score
-    all_nodes.sort(key=lambda n: getattr(n, 'score', 0) or 0, reverse=True)
-
-    if num_sources > 1:
-        source_counts = {}
-        for n in all_nodes:
-            src = n.node.metadata.get('_federation_source', '?') if hasattr(n, 'node') else '?'
-            source_counts[src] = source_counts.get(src, 0) + 1
-        logger.info(f"Federated retrieve: {len(all_nodes)} nodes from {source_counts}")
-
-    return all_nodes[:total_limit]
-
-
-def synthesize_answer(query_str: str, nodes: list, llm) -> str:
-    """Synthesize answer from retrieved nodes."""
-    if not nodes:
-        return "No relevant information found."
-
-    # Build context from nodes
-    context_parts = []
-    for i, node in enumerate(nodes[:10]):  # Limit to top 10
-        text = node.node.text if hasattr(node, 'node') else str(node)
-        context_parts.append(f"[{i+1}] {text[:500]}")
-
-    context = "\n\n".join(context_parts)
-
-    prompt = f"""Based on the following context, answer the question.
-
-Context:
-{context}
-
-Question: {query_str}
-
-Answer:"""
-
-    try:
-        response = llm.complete(prompt)
-        return str(response.text) if hasattr(response, 'text') else str(response)
-    except Exception as e:
-        logger.error(f"Failed to synthesize answer: {e}")
-        return f"Error synthesizing answer: {e}"
 
 
 def _do_research(
@@ -376,6 +322,7 @@ def _do_research(
             llm=llm,
             max_iterations=config.retrieval.research_max_iterations,
             confidence_threshold=config.retrieval.research_confidence_threshold,
+            gap_analysis_top_n=config.retrieval.research_gap_analysis_top_n,
         )
 
         result = research_retriever.research(query_str, force_exhaustive=exhaustive)

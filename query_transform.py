@@ -339,7 +339,7 @@ Generate {num_queries} alternative search queries, one per line, without numberi
             variations = [
                 line.strip()
                 for line in variations_text.split('\n')
-                if line.strip() and not line.strip().startswith(('#', '-', '*', str))
+                if line.strip() and not line.strip().startswith(('#', '-', '*'))
             ]
 
             # Remove any numbering or bullets that might be present
@@ -566,6 +566,72 @@ Output one translated query per line, without numbering or prefixes. If the orig
             return result
         else:
             logger.warning(f"Unexpected transform result type: {type(result)}")
+            return [query]
+
+    def decompose_query(self, query: str) -> list[str]:
+        """Decompose a complex multi-part query into atomic sub-queries.
+
+        Detects queries that ask about multiple topics (e.g., "Compare X and Y")
+        and splits them into independent retrieval queries. Returns [original]
+        if the query is already atomic.
+
+        Args:
+            query: User query to potentially decompose
+
+        Returns:
+            List of sub-queries (length 1 if atomic)
+        """
+        # Check cache
+        if self.enable_cache:
+            cached = self._cache.get("decompose", query)
+            if cached is not None:
+                logger.info("Decomposition cache hit")
+                return cached
+
+        prompt = f"""Analyze whether this search query should be split into separate sub-queries for better retrieval.
+
+A query should be decomposed when it asks about MULTIPLE distinct topics that would be found in different documents.
+Examples:
+- "Compare HyDE and multi-query retrieval" -> ["How does HyDE retrieval work?", "How does multi-query retrieval work?"]
+- "What are the benefits and risks of intermittent fasting?" -> ["What are the benefits of intermittent fasting?", "What are the risks of intermittent fasting?"]
+- "How does sleep affect memory?" -> NO DECOMPOSITION (single topic)
+
+Query: {query}
+
+If this query should be decomposed, output each sub-query on a separate line (2-4 sub-queries).
+If the query is already focused on a single topic, output just: ATOMIC
+
+Output:"""
+
+        try:
+            response = self.llm.complete(prompt)
+            text = response.text.strip()
+
+            if "ATOMIC" in text.upper() or not text:
+                result = [query]
+            else:
+                sub_queries = [
+                    line.strip()
+                    for line in text.split('\n')
+                    if line.strip() and not line.strip().upper().startswith('ATOMIC')
+                ]
+                # Clean numbering
+                cleaned = []
+                for sq in sub_queries:
+                    for prefix in ['1.', '2.', '3.', '4.', '1)', '2)', '3)', '4)', '- ', '* ']:
+                        if sq.startswith(prefix):
+                            sq = sq[len(prefix):].strip()
+                    if sq:
+                        cleaned.append(sq)
+                result = cleaned[:4] if len(cleaned) >= 2 else [query]
+
+            logger.info(f"Query decomposition: {len(result)} sub-queries")
+            if self.enable_cache:
+                self._cache.set("decompose", query, result)
+            return result
+
+        except Exception as e:
+            logger.warning(f"Query decomposition failed: {e}")
             return [query]
 
     def cache_stats(self) -> dict:

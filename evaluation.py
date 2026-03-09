@@ -38,6 +38,10 @@ class RetrievalMetrics:
     avg_score: Optional[float] = None
     score_variance: Optional[float] = None
     unique_sources: int = 0
+    # Latency breakdown (ms)
+    engine_build_ms: Optional[float] = None
+    query_ms: Optional[float] = None
+    total_ms: Optional[float] = None
 
 
 class RetrievalEvaluator:
@@ -53,6 +57,7 @@ class RetrievalEvaluator:
         retrieved_nodes: list,
         relevant_docs: Optional[List[str]] = None,
         k: int = 10,
+        timings: Optional[Dict[str, float]] = None,
     ) -> RetrievalMetrics:
         """Compute retrieval metrics.
 
@@ -83,6 +88,9 @@ class RetrievalEvaluator:
             avg_score=round(avg_score, 4),
             score_variance=round(score_variance, 4),
             unique_sources=len(sources),
+            engine_build_ms=timings.get("engine_build_ms") if timings else None,
+            query_ms=timings.get("query_ms") if timings else None,
+            total_ms=timings.get("total_ms") if timings else None,
         )
 
         if relevant_docs:

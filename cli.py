@@ -25,7 +25,7 @@ import indexing
 import retrieval
 from models import (
     QueryResult, ResearchResult, SourceNode, IndexSource, SourceType,
-    IndexNotFoundError, BookFilter, _normalize_category,
+    IndexNotFoundError, BookFilter, MetadataFilter, _normalize_category,
 )
 
 logger = logging.getLogger("ultrarag.cli")
@@ -277,16 +277,32 @@ def cmd_query(args):
         }, args.format))
         sys.exit(1)
 
+    # Build MetadataFilter from CLI flags
+    metadata_filter = None
+    tag_val = getattr(args, "tag", None)
+    after_val = getattr(args, "after", None)
+    before_val = getattr(args, "before", None)
+    prefix_val = getattr(args, "path_prefix", None)
+    if any([tag_val, after_val, before_val, prefix_val]):
+        metadata_filter = MetadataFilter(
+            tags=[t.strip() for t in tag_val.split(",")] if tag_val else None,
+            date_after=after_val,
+            date_before=before_val,
+            path_prefix=prefix_val,
+        )
+
     try:
         if len(indexes) == 1 and not book_filter:
             index = list(indexes.values())[0].index
             result = retrieval.query(
                 args.query, index, config, mode=args.mode,
+                metadata_filter=metadata_filter,
             )
         else:
             result = retrieval.federated_query(
                 args.query, indexes, config, mode=args.mode,
                 book_filter=book_filter,
+                metadata_filter=metadata_filter,
             )
 
         output = {
@@ -299,6 +315,16 @@ def cmd_query(args):
             "exec_time_seconds": round(result.exec_time, 2),
             "tokens_used": result.tokens_used,
         }
+
+        # Include structured confidence / validation if present
+        if result.relevance_grade:
+            output["relevance_grade"] = result.relevance_grade
+        if result.confidence is not None:
+            output["confidence"] = result.confidence
+        if result.validation_result:
+            output["validation_result"] = result.validation_result
+        if result.timings:
+            output["timings"] = result.timings
 
         print(_format_output(output, args.format))
 
@@ -424,6 +450,26 @@ def main():
         "--author", "-a",
         default=None,
         help="Filter books by author (comma-separated for multiple)",
+    )
+    qp.add_argument(
+        "--tag",
+        default=None,
+        help="Filter results by tag (comma-separated for multiple)",
+    )
+    qp.add_argument(
+        "--after",
+        default=None,
+        help="Filter results created after date (ISO: YYYY-MM-DD)",
+    )
+    qp.add_argument(
+        "--before",
+        default=None,
+        help="Filter results created before date (ISO: YYYY-MM-DD)",
+    )
+    qp.add_argument(
+        "--path-prefix",
+        default=None,
+        help="Filter results by file path prefix",
     )
 
     # --- enrich ---

@@ -21,6 +21,7 @@ class EmbeddingConfig(BaseModel):
     batch_size: int = Field(default=100)
     chunking_strategy: str = Field(default="obsidian_aware")
     late_chunking_alpha: float = Field(default=0.7)
+    semantic_breakpoint_threshold: int = Field(default=95)  # Percentile for semantic chunking split points (85-95)
     use_contextual_retrieval: bool = Field(default=False)  # Calls LLM per chunk - costs tokens!
     token_limit: int = Field(default=200_000_000)  # 200M free tier limit
 
@@ -130,10 +131,25 @@ class RetrievalConfig(BaseModel):
     research_confidence_threshold: float = Field(default=0.8)
     research_max_subqueries: int = Field(default=3)
     research_max_synthesis_sources: int = Field(default=0)  # Max sources for LLM synthesis (0 = unlimited)
+    research_gap_analysis_top_n: int = Field(default=40)  # Nodes visible to gap analysis (was 20)
 
     # Bilingual expansion settings (translate key terms to additional languages)
     enable_bilingual_expansion: bool = Field(default=False)
     expansion_languages: list = Field(default_factory=lambda: ["el"])  # Default: Greek
+
+    # Post-rerank score threshold (separate from cosine similarity threshold)
+    rerank_score_threshold: float = Field(default=0.0)  # 0 = disabled; try 0.1 for filtering
+
+    # Query decomposition (split complex queries pre-retrieval)
+    enable_query_decomposition: bool = Field(default=False)
+
+    # Contextual compression (extract relevant sentences post-rerank)
+    enable_contextual_compression: bool = Field(default=False)
+
+    # RRF fusion tuning
+    rrf_k: int = Field(default=60)  # RRF constant (lower = more weight to top ranks)
+    fusion_vector_weight: float = Field(default=1.0)
+    fusion_bm25_weight: float = Field(default=1.0)
 
     # Federated retrieval controls (performance/diversity)
     federated_top_k_per_source: int = Field(default=100)
@@ -487,6 +503,7 @@ def load_config() -> RAGConfig:
             batch_size=int(os.getenv("BATCH_SIZE", "100")),
             chunking_strategy=os.getenv("CHUNKING_STRATEGY", "obsidian_aware"),
             late_chunking_alpha=float(os.getenv("LATE_CHUNKING_ALPHA", "0.7")),
+            semantic_breakpoint_threshold=int(os.getenv("SEMANTIC_BREAKPOINT_THRESHOLD", "95")),
             use_contextual_retrieval=os.getenv("USE_CONTEXTUAL_RETRIEVAL", "false").lower() == "true",
             token_limit=int(os.getenv("EMBEDDING_TOKEN_LIMIT", "200000000"))
         ),
@@ -537,8 +554,15 @@ def load_config() -> RAGConfig:
             research_confidence_threshold=float(os.getenv("RESEARCH_CONFIDENCE_THRESHOLD", "0.8")),
             research_max_subqueries=int(os.getenv("RESEARCH_MAX_SUBQUERIES", "3")),
             research_max_synthesis_sources=int(os.getenv("RESEARCH_MAX_SYNTHESIS_SOURCES", "0")),  # 0 = unlimited
+            research_gap_analysis_top_n=int(os.getenv("RESEARCH_GAP_ANALYSIS_TOP_N", "40")),
             enable_bilingual_expansion=os.getenv("ENABLE_BILINGUAL_EXPANSION", "false").lower() == "true",
             expansion_languages=[lang.strip() for lang in os.getenv("EXPANSION_LANGUAGES", "el").split(",")],
+            rerank_score_threshold=float(os.getenv("RERANK_SCORE_THRESHOLD", "0.0")),
+            enable_query_decomposition=os.getenv("ENABLE_QUERY_DECOMPOSITION", "false").lower() == "true",
+            enable_contextual_compression=os.getenv("ENABLE_CONTEXTUAL_COMPRESSION", "false").lower() == "true",
+            rrf_k=int(os.getenv("RRF_K", "60")),
+            fusion_vector_weight=float(os.getenv("FUSION_VECTOR_WEIGHT", "1.0")),
+            fusion_bm25_weight=float(os.getenv("FUSION_BM25_WEIGHT", "1.0")),
             federated_top_k_per_source=int(os.getenv("FEDERATED_TOP_K_PER_SOURCE", "100")),
             federated_final_top_k=int(os.getenv("FEDERATED_FINAL_TOP_K", "120")),
             federated_max_chunks_per_document=int(os.getenv("FEDERATED_MAX_CHUNKS_PER_DOCUMENT", "3"))

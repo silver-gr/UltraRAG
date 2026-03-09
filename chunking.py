@@ -277,7 +277,7 @@ Context:"""
                 print(f"  [3/4] Semantic splitting {len(large_nodes)} large chunks (this may take a while)...")
                 semantic_splitter = SemanticSplitterNodeParser(
                     buffer_size=1,
-                    breakpoint_percentile_threshold=95,
+                    breakpoint_percentile_threshold=self.config.semantic_breakpoint_threshold,
                     embed_model=self.embed_model
                 )
 
@@ -337,7 +337,7 @@ Context:"""
             if large_nodes:
                 semantic_splitter = SemanticSplitterNodeParser(
                     buffer_size=1,
-                    breakpoint_percentile_threshold=95,
+                    breakpoint_percentile_threshold=self.config.semantic_breakpoint_threshold,
                     embed_model=self.embed_model
                 )
 
