@@ -67,7 +67,7 @@ pytest -x --tb=short        # Stop at first failure
 
 ## Project Overview
 
-**UltraRAG v1.3.0** - A production-grade RAG system for Obsidian vaults implementing late chunking, hybrid retrieval, query transformation (HyDE/Multi-Query), self-correction patterns, and iterative research mode.
+**UltraRAG v1.6.0** - A production-grade RAG system for Obsidian vaults implementing late chunking, hybrid retrieval, query transformation (HyDE/Multi-Query), self-correction patterns, and iterative research mode.
 
 See [CHANGELOG.md](CHANGELOG.md) for version history.
 
@@ -377,18 +377,23 @@ gemini  # authenticate once
 
 Then set `LLM_BACKEND=cli` in your .env file.
 
-## Default Configuration (v1.5.0)
+## Default Configuration (v1.6.0)
 - LLM: `gemini-3-flash-preview` (backend: `api`, context caching enabled)
 - Embeddings: `voyage-4-lite` (200M free tokens, shared embedding space with voyage-4-large)
 - Reranker: `rerank-2.5` (200M free tokens/month)
 - Chunk size: 512 tokens, overlap: 75
 - Retrieval: retrieval_candidates=150 → rerank to top_n=20 (top_k=75 for UI display)
 - Similarity threshold: 0.3 (only applied when no reranker is configured)
+- Post-rerank threshold: 0.0 (disabled; set `RERANK_SCORE_THRESHOLD=0.1` to filter low-relevance reranked results)
 - HyDE temperature: 0.7 (separate from synthesis LLM temp 0.1)
 - Response validation: enabled (Self-RAG post-generation hallucination check)
 - MMR diversity: disabled by default (max 5 chunks/doc when enabled)
-- Multi-query fusion: proper Reciprocal Rank Fusion (RRF, k=60)
+- Multi-query fusion: proper Reciprocal Rank Fusion (RRF, k=60, configurable via `RRF_K`)
+- Query decomposition: disabled (set `ENABLE_QUERY_DECOMPOSITION=true` for complex multi-part queries)
+- Contextual compression: disabled (set `ENABLE_CONTEXTUAL_COMPRESSION=true` to reduce synthesis tokens)
+- Query-time metadata filtering: via CLI `--tag`, `--after`, `--before`, `--path-prefix` flags
 - Research mode: uses all sub-queries per iteration (not just first)
+- Structured output: `QueryResult` includes `confidence`, `relevance_grade`, `validation_result`, `timings`
 
 ## Obsidian URI Links
 Enable clickable source links that open notes directly in Obsidian:

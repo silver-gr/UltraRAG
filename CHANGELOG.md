@@ -13,6 +13,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.0] - 2026-03-08
+
+### Added
+- **Post-rerank score threshold** (`RERANK_SCORE_THRESHOLD`)
+  - Separate threshold for reranked scores (different scale from cosine similarity)
+  - Applied in `RAGQueryEngine`, `HybridQueryEngine`, and `FederatedQueryEngine`
+- **Query decomposition** (`ENABLE_QUERY_DECOMPOSITION`)
+  - LLM-powered pre-retrieval splitting of complex multi-part queries
+  - Sub-queries retrieved independently and merged with RRF
+  - Example: "Compare HyDE and multi-query" → retrieves each independently
+- **Contextual compression** (`ENABLE_CONTEXTUAL_COMPRESSION`)
+  - Post-rerank extraction of query-relevant sentences from chunks
+  - Reduces synthesis token usage while preserving answer quality
+- **Query-time metadata filtering**
+  - `MetadataFilterPostprocessor` filters by tags, dates, path prefix before reranking
+  - CLI flags: `--tag`, `--after`, `--before`, `--path-prefix`
+- **Tunable RRF fusion** (`RRF_K`, `FUSION_VECTOR_WEIGHT`, `FUSION_BM25_WEIGHT`)
+  - All 5 hardcoded `RRF_K=60` sites now configurable
+- **Structured confidence output on `QueryResult`**
+  - New fields: `confidence`, `relevance_grade`, `validation_result`, `timings`
+  - CLI outputs these in structured YAML/JSON when present
+- **Search latency monitoring**
+  - Per-stage timing breakdown: `engine_build_ms`, `query_ms`, `total_ms`
+  - `RetrievalMetrics` extended with latency fields
+
+### Fixed
+- **CLI stub engine** (HIGH): `_build_query_engine()` was a stub — non-interactive CLI got no reranking, no BM25, no postprocessors. Now uses real `RAGQueryEngine`/`HybridQueryEngine`.
+- **Similarity threshold after reranker**: `RAGQueryEngine` unconditionally applied cosine similarity cutoff (0.3) which dropped valid reranked results. Now guarded with `not self.reranker`.
+- **No cross-source reranking in federated path**: `federated_query()` used ad-hoc merging with no reranking. Now delegates to `FederatedQueryEngine` with full pipeline.
+- **Dead code cleanup**: Removed `_federated_retrieve()` and `synthesize_answer()` (130 lines)
+
+### Changed
+- Default config version bumped to v1.6.0
+- `book_raptor.py` uses `get_response_synthesizer` instead of removed `synthesize_answer`
+
+---
+
 ## [1.5.0] - 2026-03-08
 
 ### Added
