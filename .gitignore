@@ -73,3 +73,4 @@ certs/*
 # Large/Binary files not needed in repo
 *.pdf
 compass_artifact_*.md
+.gitnexus
