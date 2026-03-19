@@ -269,8 +269,12 @@ class UltraRAG:
                     max_tokens=self.config.llm.max_tokens
                 )
 
-                # Wrap with token tracking (only for paid API)
-                self.llm = wrap_llm_with_tracking(base_llm, model_name=self.config.llm.model)
+                # Wrap with token tracking and optional fallback chain (only for paid API)
+                self.llm = wrap_llm_with_tracking(
+                    base_llm,
+                    model_name=self.config.llm.model,
+                    fallback_models=self.config.llm.fallback_models or None,
+                )
                 logger.info(f"LLM token tracking enabled for {self.config.llm.model}")
 
             Settings.llm = self.llm
@@ -2793,12 +2797,14 @@ def main():
             continue
 
         if query.lower() == 'cache':
-            # Invalidate cache
+            # Invalidate caches
             from vector_store import invalidate_cache
+            from retrieval import invalidate_result_cache
             if invalidate_cache():
                 print("✅ Cache invalidated. Restart app to reload.")
             else:
                 print("No cache to invalidate.")
+            invalidate_result_cache()
             continue
 
         if not query:

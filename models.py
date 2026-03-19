@@ -297,6 +297,23 @@ class BookFilter:
         return " AND ".join(clauses) if clauses else None
 
 
+# === UTILITIES ===
+
+def is_none_or_empty(item) -> bool:
+    """Check if item is None, empty string (or whitespace-only), or empty iterable.
+
+    Available for use across the codebase instead of scattered
+    ``if x is None or len(x) == 0`` / ``if x is None or x == ""`` checks.
+    """
+    if item is None:
+        return True
+    if isinstance(item, str):
+        return item.strip() == ""
+    if hasattr(item, "__len__"):
+        return len(item) == 0
+    return False
+
+
 # === TYPE ALIASES ===
 
 WikilinkGraph = dict[str, list[str]]

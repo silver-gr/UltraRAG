@@ -146,6 +146,9 @@ class RetrievalConfig(BaseModel):
     # Contextual compression (extract relevant sentences post-rerank)
     enable_contextual_compression: bool = Field(default=False)
 
+    # Query result cache (LRU, skips entire pipeline on repeated queries)
+    result_cache_size: int = Field(default=64)
+
     # RRF fusion tuning
     rrf_k: int = Field(default=60)  # RRF constant (lower = more weight to top ranks)
     fusion_vector_weight: float = Field(default=1.0)
@@ -202,6 +205,7 @@ class LLMConfig(BaseModel):
     max_tokens: int = Field(default=65536)  # Gemini 3 Flash max output
     enable_thinking_mode: bool = Field(default=True)
     backend: str = Field(default="api")  # "api" or "cli" (uses gemini CLI for separate quota)
+    fallback_models: list[str] = Field(default_factory=list)  # Fallback models on retryable errors
 
     @field_validator('backend')
     @classmethod
@@ -560,6 +564,7 @@ def load_config() -> RAGConfig:
             rerank_score_threshold=float(os.getenv("RERANK_SCORE_THRESHOLD", "0.0")),
             enable_query_decomposition=os.getenv("ENABLE_QUERY_DECOMPOSITION", "false").lower() == "true",
             enable_contextual_compression=os.getenv("ENABLE_CONTEXTUAL_COMPRESSION", "false").lower() == "true",
+            result_cache_size=int(os.getenv("RESULT_CACHE_SIZE", "64")),
             rrf_k=int(os.getenv("RRF_K", "60")),
             fusion_vector_weight=float(os.getenv("FUSION_VECTOR_WEIGHT", "1.0")),
             fusion_bm25_weight=float(os.getenv("FUSION_BM25_WEIGHT", "1.0")),
@@ -571,7 +576,10 @@ def load_config() -> RAGConfig:
             model=os.getenv("LLM_MODEL", "gemini-3-flash-preview"),
             temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
             max_tokens=int(os.getenv("LLM_MAX_TOKENS", "65536")),
-            backend=os.getenv("LLM_BACKEND", "api")  # "api" or "cli"
+            backend=os.getenv("LLM_BACKEND", "api"),  # "api" or "cli"
+            fallback_models=[
+                m.strip() for m in os.getenv("LLM_FALLBACK_MODELS", "").split(",") if m.strip()
+            ],
         ),
         conversations=ConversationsConfig(
             enabled=os.getenv("CONVERSATIONS_ENABLED", "false").lower() == "true",

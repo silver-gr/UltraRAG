@@ -8,11 +8,14 @@ PUBLIC API:
 - query(query_str, index, mode) -> QueryResult
 - federated_query(query_str, indexes, mode) -> QueryResult
 - research(query_str, indexes, exhaustive) -> ResearchResult
+- invalidate_result_cache() -> None
 """
 
 import logging
+import threading
 import time
-from typing import Literal
+from collections import OrderedDict
+from typing import Any, Literal
 
 from llama_index.core import VectorStoreIndex
 
@@ -24,6 +27,80 @@ from models import (
 )
 
 logger = logging.getLogger("ultrarag.retrieval")
+
+
+# === QUERY RESULT CACHE ===
+
+class QueryResultCache:
+    """Thread-safe LRU cache for final QueryResult objects.
+
+    Caches the output of query() and federated_query() so repeated identical
+    queries (e.g. web UI re-runs) skip the entire retrieval pipeline.
+    """
+
+    def __init__(self, max_size: int = 64):
+        self._cache: OrderedDict[str, Any] = OrderedDict()
+        self._max_size = max_size
+        self._lock = threading.Lock()
+        self._hits = 0
+        self._misses = 0
+
+    def _make_key(self, query: str, **params: Any) -> str:
+        """Build composite cache key from query text and parameters."""
+        normalized = query.strip().lower()
+        param_str = "-".join(f"{k}={v}" for k, v in sorted(params.items()))
+        return f"{normalized}-{param_str}"
+
+    def get(self, key: str) -> QueryResult | None:
+        with self._lock:
+            if key in self._cache:
+                self._hits += 1
+                self._cache.move_to_end(key)
+                logger.info("Query result cache hit")
+                return self._cache[key]
+            self._misses += 1
+            return None
+
+    def put(self, key: str, value: QueryResult) -> None:
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            elif len(self._cache) >= self._max_size:
+                self._cache.popitem(last=False)
+            self._cache[key] = value
+
+    def invalidate(self) -> None:
+        with self._lock:
+            count = len(self._cache)
+            self._cache.clear()
+            if count:
+                logger.info(f"Result cache invalidated ({count} entries cleared)")
+
+    def stats(self) -> dict[str, int]:
+        with self._lock:
+            return {
+                "size": len(self._cache),
+                "max_size": self._max_size,
+                "hits": self._hits,
+                "misses": self._misses,
+            }
+
+
+_result_cache = QueryResultCache(max_size=64)
+
+
+def invalidate_result_cache() -> None:
+    """Invalidate the query result cache. Call when the index is rebuilt."""
+    _result_cache.invalidate()
+
+
+def _init_result_cache(config: RAGConfig) -> None:
+    """Re-initialize the module-level cache if config size differs."""
+    global _result_cache
+    desired = config.retrieval.result_cache_size
+    if _result_cache._max_size != desired:
+        _result_cache = QueryResultCache(max_size=desired)
+        logger.info(f"Result cache resized to {desired}")
 
 
 # === PUBLIC API ===
@@ -61,6 +138,17 @@ def query(
         raise IndexNotFoundError("vault")
 
     config = config or load_config()
+    _init_result_cache(config)
+
+    # Check result cache
+    filter_str = str(metadata_filter) if metadata_filter else ""
+    cache_key = _result_cache._make_key(
+        query_str, mode=mode, filter=filter_str,
+    )
+    cached = _result_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     start_time = time.time()
     timings: dict[str, float] = {}
 
@@ -90,7 +178,7 @@ def query(
         total_ms = round((time.time() - start_time) * 1000, 1)
         timings["total_ms"] = total_ms
 
-        return QueryResult(
+        result = QueryResult(
             answer=str(response.response) if hasattr(response, 'response') else str(response),
             sources=sources,
             tokens_used=_get_tokens_used(response),
@@ -102,6 +190,9 @@ def query(
             relevance_grade=relevance_grade,
             timings=timings,
         )
+
+        _result_cache.put(cache_key, result)
+        return result
 
     except Exception as e:
         if "429" in str(e) or "rate limit" in str(e).lower():
@@ -142,6 +233,20 @@ def federated_query(
         raise IndexNotFoundError("federated")
 
     config = config or load_config()
+    _init_result_cache(config)
+
+    # Check result cache
+    source_key = source_filter or "all"
+    filter_str = str(metadata_filter) if metadata_filter else ""
+    book_str = str(book_filter) if book_filter else ""
+    cache_key = _result_cache._make_key(
+        query_str, mode=mode, source=source_key,
+        filter=filter_str, book=book_str,
+    )
+    cached = _result_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     start_time = time.time()
     timings: dict[str, float] = {}
 
@@ -182,7 +287,7 @@ def federated_query(
     total_ms = round((time.time() - start_time) * 1000, 1)
     timings["total_ms"] = total_ms
 
-    return QueryResult(
+    result = QueryResult(
         answer=str(response.response) if hasattr(response, 'response') else str(response),
         sources=extract_sources(source_nodes),
         tokens_used=_get_tokens_used(response),
@@ -192,6 +297,9 @@ def federated_query(
         confidence=confidence,
         timings=timings,
     )
+
+    _result_cache.put(cache_key, result)
+    return result
 
 
 def research(
@@ -290,7 +398,10 @@ def get_llm(config: RAGConfig):
         else:
             from llama_index.llms.google_genai import GoogleGenAI
             llm = GoogleGenAI(model=config.llm.model)
-            return wrap_llm_with_tracking(llm)
+            return wrap_llm_with_tracking(
+                llm,
+                fallback_models=config.llm.fallback_models or None,
+            )
     except Exception as e:
         logger.warning(f"Failed to get LLM: {e}, using default")
         from llama_index.llms.google_genai import GoogleGenAI

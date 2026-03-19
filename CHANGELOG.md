@@ -13,6 +13,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.1] - 2026-03-19
+
+### Added
+- **Heading ancestry in chunks**: Obsidian-aware chunking now prepends parent heading hierarchy to each chunk, giving retrieved chunks structural context for better relevance
+- **XML context wrapping in research mode**: Research iterations wrapped in structured `<iteration_N_results>` XML tags for clearer LLM gap analysis and synthesis
+- **Model fallback chain** (`LLM_FALLBACK_MODELS`): Optional fallback models tried on retryable errors (429/5xx/timeout) before failing
+- **Gemini retry-delay parsing**: Parses `retryDelay` from Gemini 429 errors; waits if <=10s, falls back if longer
+- **Graceful degradation**: Returns structured error response instead of crashing when all LLM models fail
+- **Query result LRU cache** (`RESULT_CACHE_SIZE`): Thread-safe cache for `query()` and `federated_query()` — repeated queries return in <10ms
+- **Duplicate query detection in research**: Skips already-used sub-queries, triggers convergence when all sub-queries are duplicates
+- **Cache token tracking**: LLM cost tracker now separately tracks `cache_read_tokens`, `cache_write_tokens`, `thought_tokens` with appropriate pricing
+- **Content hash deduplication**: Third dedup layer (MD5) in federated retrieval catches cross-source duplicates
+- **`is_none_or_empty()` utility** in `models.py` for consistent None/empty checking
+
+### Changed
+- `tracked_llm.py` rewritten with fallback chain, retry-delay parsing, and graceful degradation
+- `llm_token_tracker.py` extended with cache and thought token fields (backward compatible with old usage data)
+- Research mode context presentation changed from flat text to structured XML
+
 ## [1.6.0] - 2026-03-08
 
 ### Added

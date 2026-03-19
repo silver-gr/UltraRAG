@@ -329,13 +329,32 @@ class FederatedRetriever(BaseRetriever):
                     seen_content_keys.add(content_key)
                 unique_nodes.append(node)
 
-        # Sort by score descending
+        # Sort by score descending (before content-hash dedup so we keep the higher-scored duplicate)
         unique_nodes.sort(key=lambda x: x.score or 0.0, reverse=True)
+
+        # Content hash dedup: catches identical text from different sources/paths (e.g. same note
+        # indexed in both vault and conversations).  Runs after node-id + content-signature dedup.
+        content_hashes: set = set()
+        content_deduped: List[NodeWithScore] = []
+        for node in unique_nodes:
+            text = node.node.get_content().strip().lower()
+            content_hash = hashlib.md5(text.encode("utf-8")).hexdigest()
+            if content_hash not in content_hashes:
+                content_hashes.add(content_hash)
+                content_deduped.append(node)
+            else:
+                logger.debug(
+                    f"Content hash dedup: removed duplicate from "
+                    f"{node.node.metadata.get('file_name', 'unknown')}"
+                )
+        content_hash_removed = len(unique_nodes) - len(content_deduped)
+        if content_hash_removed:
+            logger.info(f"Content hash dedup removed {content_hash_removed} cross-source duplicate(s)")
 
         # Enforce source diversity by limiting chunks per document.
         diversified_nodes: List[NodeWithScore] = []
         per_doc_counts: dict[str, int] = defaultdict(int)
-        for node in unique_nodes:
+        for node in content_deduped:
             doc_key = self._document_key(node)
             if doc_key:
                 if per_doc_counts[doc_key] >= self.max_chunks_per_document:
@@ -348,7 +367,8 @@ class FederatedRetriever(BaseRetriever):
 
         logger.info(
             f"Federated retrieval: {len(all_nodes)} total -> "
-            f"{len(unique_nodes)} unique -> {len(diversified_nodes)} diversified -> {len(result_nodes)} final"
+            f"{len(unique_nodes)} unique -> {len(content_deduped)} content-deduped -> "
+            f"{len(diversified_nodes)} diversified -> {len(result_nodes)} final"
         )
 
         return result_nodes

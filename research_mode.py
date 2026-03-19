@@ -568,6 +568,13 @@ class ResearchRetriever:
         # Track previous queries for similarity detection
         previous_queries: List[str] = []
 
+        # Track all queries used for exact duplicate detection (normalized)
+        seen_queries: Set[str] = set()
+        seen_queries.add(query.lower().strip())
+
+        # Track per-iteration context for structured XML wrapping
+        iteration_contexts: List[str] = []
+
         current_query = query
 
         for iteration_num in range(1, effective_max_iterations + 1):
@@ -607,11 +614,26 @@ class ResearchRetriever:
                 if file_path:
                     retrieved_paths.add(file_path)
 
-            # Convergence detection: check all criteria
+            # Build structured XML context for this iteration
             new_unique_nodes = len(all_nodes) - nodes_before
             total_nodes_now = len(all_nodes)
             information_gain = new_unique_nodes / max(total_nodes_now, 1)
 
+            iter_doc_lines = []
+            for idx, node in enumerate(nodes, 1):
+                title = node.metadata.get('title', 'Unknown')
+                file_path = node.metadata.get('file_path', '')
+                iter_doc_lines.append(f"[Source {idx}] {file_path}: {node.node.text}")
+            iter_xml = (
+                f"\n<iteration_{iteration_num}_results>"
+                f"\n<retrieved_documents>\n" + "\n".join(iter_doc_lines) + "\n</retrieved_documents>"
+                f"\n<query>{current_query}</query>"
+                f"\n<new_sources_count>{new_unique_nodes}</new_sources_count>"
+                f"\n</iteration_{iteration_num}_results>"
+            )
+            iteration_contexts.append(iter_xml)
+
+            # Convergence detection: check all criteria
             logger.info(
                 f"Convergence: +{new_unique_nodes} new nodes, "
                 f"total={total_nodes_now}, gain={information_gain:.2%}"
@@ -632,7 +654,8 @@ class ResearchRetriever:
                 logger.info(f"Convergence detected: {stop_reason}. Stopping research.")
                 # Still do gap analysis for this iteration's record
                 gaps, confidence, full_analysis = self._analyze_gaps(
-                    query, list(all_nodes.values()), is_exhaustive=is_exhaustive
+                    query, list(all_nodes.values()), is_exhaustive=is_exhaustive,
+                    iteration_contexts=iteration_contexts,
                 )
                 iteration_result = ResearchIteration(
                     iteration=iteration_num,
@@ -655,7 +678,8 @@ class ResearchRetriever:
 
             # Analyze gaps and compute confidence
             gaps, confidence, full_analysis = self._analyze_gaps(
-                query, list(all_nodes.values()), is_exhaustive=is_exhaustive
+                query, list(all_nodes.values()), is_exhaustive=is_exhaustive,
+                iteration_contexts=iteration_contexts,
             )
 
             logger.info(
@@ -705,6 +729,22 @@ class ResearchRetriever:
                 if not subqueries:
                     logger.info("No sub-queries generated, stopping research")
                     break
+
+                # Filter out duplicate sub-queries already used in previous iterations
+                unique_subqueries = []
+                for sq in subqueries:
+                    normalized = sq.lower().strip()
+                    if normalized in seen_queries:
+                        logger.info(f"Skipping duplicate sub-query: {sq}")
+                    else:
+                        unique_subqueries.append(sq)
+                        seen_queries.add(normalized)
+
+                if not unique_subqueries:
+                    logger.info("All sub-queries are duplicates, converging research")
+                    break
+
+                subqueries = unique_subqueries
 
                 # Retrieve with ALL sub-queries and merge into the node pool
                 # (previously only used subqueries[0], wasting LLM-generated queries)
@@ -823,7 +863,8 @@ class ResearchRetriever:
         self,
         query: str,
         nodes: List[NodeWithScore],
-        is_exhaustive: bool = False
+        is_exhaustive: bool = False,
+        iteration_contexts: Optional[List[str]] = None,
     ) -> tuple[Optional[str], float, Optional[str]]:
         """Analyze gaps in retrieved content using LLM.
 
@@ -831,6 +872,7 @@ class ResearchRetriever:
             query: Original query
             nodes: Currently retrieved nodes
             is_exhaustive: If True, use stricter gap analysis for comprehensive queries
+            iteration_contexts: Optional list of XML-wrapped per-iteration context strings
 
         Returns:
             Tuple of (gaps description, confidence score 0-1, full analysis text)
@@ -840,13 +882,16 @@ class ResearchRetriever:
             return "No relevant information found", 0.0, None
 
         # Build context from top nodes for gap analysis
-        context_chunks = []
-        for idx, node in enumerate(nodes[:self.gap_analysis_top_n], 1):
-            title = node.metadata.get('title', 'Unknown')
-            file_path = node.metadata.get('file_path', '')
-            context_chunks.append(f"[Source {idx}: {title}]\nPath: {file_path}\n{node.node.text}")
-
-        context = "\n\n".join(context_chunks)
+        # Use structured XML iteration contexts when available, flat format otherwise
+        if iteration_contexts:
+            context = "\n".join(iteration_contexts)
+        else:
+            context_chunks = []
+            for idx, node in enumerate(nodes[:self.gap_analysis_top_n], 1):
+                title = node.metadata.get('title', 'Unknown')
+                file_path = node.metadata.get('file_path', '')
+                context_chunks.append(f"[Source {idx}: {title}]\nPath: {file_path}\n{node.node.text}")
+            context = "\n\n".join(context_chunks)
 
         # Add special instructions for exhaustive queries
         exhaustive_note = ""

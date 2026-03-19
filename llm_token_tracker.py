@@ -18,31 +18,45 @@ logger = logging.getLogger(__name__)
 
 # Gemini pricing per 1M tokens (as of Jan 2026)
 # Source: https://ai.google.dev/gemini-api/docs/pricing
+# cache_read: price for reading from context cache (typically ~4x cheaper than input)
+# cache_write: price for writing to context cache (same as input for most models)
 GEMINI_PRICING = {
     "gemini-3-flash-preview": {
-        "input": 0.50,   # $0.50 per 1M input tokens
-        "output": 3.00,  # $3.00 per 1M output tokens
+        "input": 0.50,        # $0.50 per 1M input tokens
+        "output": 3.00,       # $3.00 per 1M output tokens
+        "cache_read": 0.125,  # $0.125 per 1M cache read tokens (4x cheaper)
+        "cache_write": 0.50,  # $0.50 per 1M cache write tokens (same as input)
     },
     "gemini-3-pro-preview": {
-        "input": 2.00,   # $2.00 per 1M input tokens (<=200k context)
-        "output": 12.00, # $12.00 per 1M output tokens
+        "input": 2.00,        # $2.00 per 1M input tokens (<=200k context)
+        "output": 12.00,      # $12.00 per 1M output tokens
+        "cache_read": 0.50,   # $0.50 per 1M cache read tokens (4x cheaper)
+        "cache_write": 2.00,  # $2.00 per 1M cache write tokens (same as input)
     },
     "gemini-2.5-flash": {
         "input": 0.30,
         "output": 2.50,
+        "cache_read": 0.075,
+        "cache_write": 0.30,
     },
     "gemini-2.5-flash-preview-09-2025": {
         "input": 0.30,
         "output": 2.50,
+        "cache_read": 0.075,
+        "cache_write": 0.30,
     },
     "gemini-flash-latest": {  # Used for gap analysis
         "input": 0.30,
         "output": 2.50,
+        "cache_read": 0.075,
+        "cache_write": 0.30,
     },
     # Default fallback for unknown models
     "default": {
         "input": 0.50,
         "output": 3.00,
+        "cache_read": 0.125,
+        "cache_write": 0.50,
     }
 }
 
@@ -53,17 +67,22 @@ class DailyUsage:
     date: str
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    thought_tokens: int = 0
     requests: int = 0
     input_cost: float = 0.0
     output_cost: float = 0.0
+    cache_read_cost: float = 0.0
+    cache_write_cost: float = 0.0
 
     @property
     def total_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens
+        return self.input_tokens + self.output_tokens + self.thought_tokens
 
     @property
     def total_cost(self) -> float:
-        return self.input_cost + self.output_cost
+        return self.input_cost + self.output_cost + self.cache_read_cost + self.cache_write_cost
 
 
 @dataclass
@@ -95,9 +114,14 @@ class LLMTokenTracker:
                         date=date_str,
                         input_tokens=day_data.get('input_tokens', 0),
                         output_tokens=day_data.get('output_tokens', 0),
+                        cache_read_tokens=day_data.get('cache_read_tokens', 0),
+                        cache_write_tokens=day_data.get('cache_write_tokens', 0),
+                        thought_tokens=day_data.get('thought_tokens', 0),
                         requests=day_data.get('requests', 0),
                         input_cost=day_data.get('input_cost', 0.0),
                         output_cost=day_data.get('output_cost', 0.0),
+                        cache_read_cost=day_data.get('cache_read_cost', 0.0),
+                        cache_write_cost=day_data.get('cache_write_cost', 0.0),
                     )
 
                 logger.info(f"Loaded LLM usage data: {len(self.daily_usage)} days tracked")
@@ -142,7 +166,10 @@ class LLMTokenTracker:
         self,
         input_tokens: int,
         output_tokens: int,
-        model: str = "gemini-3-flash-preview"
+        model: str = "gemini-3-flash-preview",
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
+        thought_tokens: int = 0,
     ) -> None:
         """Record token usage for an LLM call.
 
@@ -150,6 +177,9 @@ class LLMTokenTracker:
             input_tokens: Number of input/prompt tokens
             output_tokens: Number of output/completion tokens
             model: Model name for pricing lookup
+            cache_read_tokens: Number of tokens read from context cache
+            cache_write_tokens: Number of tokens written to context cache
+            thought_tokens: Number of thinking/reasoning tokens (Gemini thinking models)
         """
         with self._lock:
             today = date.today().isoformat()
@@ -164,17 +194,25 @@ class LLMTokenTracker:
             # Update tokens
             usage.input_tokens += input_tokens
             usage.output_tokens += output_tokens
+            usage.cache_read_tokens += cache_read_tokens
+            usage.cache_write_tokens += cache_write_tokens
+            usage.thought_tokens += thought_tokens
             usage.requests += 1
 
             # Update costs
             usage.input_cost += self._calculate_cost(input_tokens, pricing["input"])
             usage.output_cost += self._calculate_cost(output_tokens, pricing["output"])
+            usage.cache_read_cost += self._calculate_cost(cache_read_tokens, pricing.get("cache_read", pricing["input"]))
+            usage.cache_write_cost += self._calculate_cost(cache_write_tokens, pricing.get("cache_write", pricing["input"]))
 
             self._save_usage()
 
             logger.debug(
-                f"Recorded LLM usage: {input_tokens:,} in / {output_tokens:,} out "
-                f"(${usage.total_cost:.4f} today)"
+                f"Recorded LLM usage: {input_tokens:,} in / {output_tokens:,} out"
+                + (f" / {cache_read_tokens:,} cache_read" if cache_read_tokens else "")
+                + (f" / {cache_write_tokens:,} cache_write" if cache_write_tokens else "")
+                + (f" / {thought_tokens:,} thought" if thought_tokens else "")
+                + f" (${usage.total_cost:.4f} today)"
             )
 
     def estimate_tokens(self, text: str) -> int:
@@ -191,8 +229,8 @@ class LLMTokenTracker:
             today = date.today().isoformat()
             return self.daily_usage.get(today)
 
-    def get_today_totals(self) -> tuple[int, int]:
-        """Get today's token totals as (input_tokens, output_tokens).
+    def get_today_totals(self) -> tuple[int, int, int, int, int]:
+        """Get today's token totals as (input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, thought_tokens).
 
         Useful for calculating per-query token usage by taking before/after snapshots.
         """
@@ -200,8 +238,14 @@ class LLMTokenTracker:
             today = date.today().isoformat()
             usage = self.daily_usage.get(today)
             if usage:
-                return (usage.input_tokens, usage.output_tokens)
-            return (0, 0)
+                return (
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.cache_read_tokens,
+                    usage.cache_write_tokens,
+                    usage.thought_tokens,
+                )
+            return (0, 0, 0, 0, 0)
 
     def get_all_daily_usage(self) -> list[DailyUsage]:
         """Get all daily usage stats sorted by date (newest first)."""
@@ -217,18 +261,28 @@ class LLMTokenTracker:
         with self._lock:
             total_input = sum(u.input_tokens for u in self.daily_usage.values())
             total_output = sum(u.output_tokens for u in self.daily_usage.values())
+            total_cache_read = sum(u.cache_read_tokens for u in self.daily_usage.values())
+            total_cache_write = sum(u.cache_write_tokens for u in self.daily_usage.values())
+            total_thought = sum(u.thought_tokens for u in self.daily_usage.values())
             total_requests = sum(u.requests for u in self.daily_usage.values())
             total_input_cost = sum(u.input_cost for u in self.daily_usage.values())
             total_output_cost = sum(u.output_cost for u in self.daily_usage.values())
+            total_cache_read_cost = sum(u.cache_read_cost for u in self.daily_usage.values())
+            total_cache_write_cost = sum(u.cache_write_cost for u in self.daily_usage.values())
 
             return {
                 'total_input_tokens': total_input,
                 'total_output_tokens': total_output,
-                'total_tokens': total_input + total_output,
+                'total_cache_read_tokens': total_cache_read,
+                'total_cache_write_tokens': total_cache_write,
+                'total_thought_tokens': total_thought,
+                'total_tokens': total_input + total_output + total_thought,
                 'total_requests': total_requests,
                 'total_input_cost': total_input_cost,
                 'total_output_cost': total_output_cost,
-                'total_cost': total_input_cost + total_output_cost,
+                'total_cache_read_cost': total_cache_read_cost,
+                'total_cache_write_cost': total_cache_write_cost,
+                'total_cost': total_input_cost + total_output_cost + total_cache_read_cost + total_cache_write_cost,
                 'days_tracked': len(self.daily_usage),
             }
 
@@ -247,10 +301,15 @@ class LLMTokenTracker:
                 'Date': usage.date,
                 'Input Tokens': f"{usage.input_tokens:,}",
                 'Output Tokens': f"{usage.output_tokens:,}",
+                'Cache Read Tokens': f"{usage.cache_read_tokens:,}",
+                'Cache Write Tokens': f"{usage.cache_write_tokens:,}",
+                'Thought Tokens': f"{usage.thought_tokens:,}",
                 'Total Tokens': f"{usage.total_tokens:,}",
                 'Requests': usage.requests,
                 'Input Cost': f"${usage.input_cost:.4f}",
                 'Output Cost': f"${usage.output_cost:.4f}",
+                'Cache Read Cost': f"${usage.cache_read_cost:.4f}",
+                'Cache Write Cost': f"${usage.cache_write_cost:.4f}",
                 'Total Cost': f"${usage.total_cost:.4f}",
             }
             for usage in daily
@@ -267,17 +326,29 @@ class LLMTokenTracker:
 
         if today:
             print(f"\nToday ({today.date}):")
-            print(f"  Input tokens:  {today.input_tokens:>12,}")
-            print(f"  Output tokens: {today.output_tokens:>12,}")
-            print(f"  Requests:      {today.requests:>12,}")
-            print(f"  Cost:          ${today.total_cost:>11.4f}")
+            print(f"  Input tokens:       {today.input_tokens:>12,}")
+            print(f"  Output tokens:      {today.output_tokens:>12,}")
+            if today.cache_read_tokens:
+                print(f"  Cache read tokens:  {today.cache_read_tokens:>12,}")
+            if today.cache_write_tokens:
+                print(f"  Cache write tokens: {today.cache_write_tokens:>12,}")
+            if today.thought_tokens:
+                print(f"  Thought tokens:     {today.thought_tokens:>12,}")
+            print(f"  Requests:           {today.requests:>12,}")
+            print(f"  Cost:               ${today.total_cost:>11.4f}")
 
         print(f"\nAll-time totals ({stats['days_tracked']} days):")
-        print(f"  Input tokens:  {stats['total_input_tokens']:>12,}")
-        print(f"  Output tokens: {stats['total_output_tokens']:>12,}")
-        print(f"  Total tokens:  {stats['total_tokens']:>12,}")
-        print(f"  Requests:      {stats['total_requests']:>12,}")
-        print(f"  Total cost:    ${stats['total_cost']:>11.4f}")
+        print(f"  Input tokens:       {stats['total_input_tokens']:>12,}")
+        print(f"  Output tokens:      {stats['total_output_tokens']:>12,}")
+        if stats['total_cache_read_tokens']:
+            print(f"  Cache read tokens:  {stats['total_cache_read_tokens']:>12,}")
+        if stats['total_cache_write_tokens']:
+            print(f"  Cache write tokens: {stats['total_cache_write_tokens']:>12,}")
+        if stats['total_thought_tokens']:
+            print(f"  Thought tokens:     {stats['total_thought_tokens']:>12,}")
+        print(f"  Total tokens:       {stats['total_tokens']:>12,}")
+        print(f"  Requests:           {stats['total_requests']:>12,}")
+        print(f"  Total cost:         ${stats['total_cost']:>11.4f}")
 
         print("\n" + "=" * 70 + "\n")
 
@@ -312,8 +383,18 @@ def get_llm_tracker(storage_path: Path = None) -> LLMTokenTracker:
 def record_llm_usage(
     input_tokens: int,
     output_tokens: int,
-    model: str = "gemini-3-flash-preview"
+    model: str = "gemini-3-flash-preview",
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    thought_tokens: int = 0,
 ) -> None:
     """Convenience function to record LLM usage."""
     tracker = get_llm_tracker()
-    tracker.record_usage(input_tokens, output_tokens, model)
+    tracker.record_usage(
+        input_tokens,
+        output_tokens,
+        model,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        thought_tokens=thought_tokens,
+    )

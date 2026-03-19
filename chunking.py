@@ -42,6 +42,37 @@ class ObsidianChunker:
         word_count = len(text.split())
         return int(word_count * 1.3)
 
+    def _build_heading_ancestry(self, header_path: str) -> str:
+        """Build a markdown heading ancestry string from MarkdownNodeParser's header_path.
+
+        Converts a header_path like '/Top Level/Section A/' into:
+            # Top Level
+            ## Section A
+
+        Each level in the path gets a corresponding heading depth (# for first, ## for second, etc.).
+        This provides structural context when the ancestry is prepended to a chunk.
+
+        Args:
+            header_path: Slash-delimited path from MarkdownNodeParser metadata,
+                         e.g. '/Parent Heading/Child Heading/'
+
+        Returns:
+            Markdown heading string with proper levels, or empty string if no ancestry.
+        """
+        if not header_path or header_path == '/':
+            return ''
+
+        # Split path and filter empty segments
+        parts = [p for p in header_path.split('/') if p]
+        if not parts:
+            return ''
+
+        lines = []
+        for level, heading in enumerate(parts, start=1):
+            lines.append(f"{'#' * level} {heading}")
+
+        return '\n'.join(lines)
+
     def _preserve_markdown_structures(self, text: str) -> List[str]:
         """Split text while preserving code blocks, lists, and wikilinks.
 
@@ -240,17 +271,31 @@ Context:"""
             logger.debug(f"Created {len(header_nodes)} markdown header nodes")
 
             # Step 2: Apply structure-preserving splits to each header section
+            # and prepend heading ancestry for structural context
             print("  [2/4] Preserving code blocks, lists, and wikilinks...")
             structure_preserved_nodes = []
             for node in header_nodes:
+                # Build heading ancestry from MarkdownNodeParser's header_path
+                header_path = node.metadata.get('header_path', '/')
+                ancestry_str = self._build_heading_ancestry(header_path)
+
                 # Use structure-preserving splitting
                 chunk_texts = self._preserve_markdown_structures(node.text)
 
                 for chunk_text in chunk_texts:
-                    # Create TextNode with metadata from parent
+                    metadata = node.metadata.copy()
+                    # Store original text without ancestry for deduplication
+                    metadata['original_text'] = chunk_text
+
+                    # Prepend ancestry to the text that gets embedded
+                    if ancestry_str:
+                        final_text = f"{ancestry_str}\n{chunk_text}"
+                    else:
+                        final_text = chunk_text
+
                     text_node = TextNode(
-                        text=chunk_text,
-                        metadata=node.metadata.copy()
+                        text=final_text,
+                        metadata=metadata
                     )
                     structure_preserved_nodes.append(text_node)
 

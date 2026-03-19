@@ -517,7 +517,12 @@ def delete_from_index(
 
     logger.info(f"Deleted {actual_deleted} rows for {deleted} files from {table_name}")
 
-    # Invalidate cache since index changed
+    # Invalidate caches since index changed
     invalidate_cache()
+    try:
+        from retrieval import invalidate_result_cache
+        invalidate_result_cache()
+    except ImportError:
+        pass
 
     return actual_deleted

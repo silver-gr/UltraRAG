@@ -163,7 +163,7 @@ If you change runtime behavior, verify all applicable items are updated in the s
 <!-- gitnexus:start -->
 # GitNexus MCP
 
-This project is indexed by GitNexus as **UltraRAG** (3615 symbols, 6702 relationships, 132 execution flows).
+This project is indexed by GitNexus as **UltraRAG** (3621 symbols, 6705 relationships, 133 execution flows).
 
 ## Always Start Here
 

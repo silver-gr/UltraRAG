@@ -74,3 +74,10 @@ certs/*
 *.pdf
 compass_artifact_*.md
 .gitnexus
+
+# Reference codebases
+khoj/
+
+# Temp audit/report files
+bug_report.json
+refactor_audit.json
