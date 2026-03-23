@@ -418,9 +418,21 @@ def _do_research(
     try:
         from research_mode import ResearchRetriever
         from federated_query import FederatedRetriever
+        from federated_query import IndexSource as FedIndexSource
+
+        # Convert models.IndexSource -> federated_query.IndexSource
+        sources_list = []
+        for src in indexes.values():
+            sources_list.append(FedIndexSource(
+                name=src.name,
+                source_type=src.source_type.value,
+                index=src.index,
+                weight=src.weight,
+                nodes=src.nodes,
+                wikilink_graph=src.wikilink_graph,
+            ))
 
         # Build federated retriever
-        sources_list = list(indexes.values())
         base_retriever = FederatedRetriever(
             sources=sources_list,
             config=config,
@@ -438,17 +450,20 @@ def _do_research(
 
         result = research_retriever.research(query_str, force_exhaustive=exhaustive)
 
-        # Convert to our ResearchResult type
+        # Convert research_mode.ResearchResult -> models.ResearchResult
+        # research_mode.ResearchResult uses: final_nodes, total_iterations, final_confidence
+        final_nodes = getattr(result, 'final_nodes', None) or getattr(result, 'source_nodes', [])
         return ResearchResult(
-            answer=result.answer if hasattr(result, 'answer') else str(result),
-            sources=extract_sources(result.source_nodes if hasattr(result, 'source_nodes') else []),
+            answer=getattr(result, 'answer', f"Research complete: {len(final_nodes)} nodes found"),
+            sources=extract_sources(final_nodes),
             tokens_used=_get_tokens_used(result),
             exec_time=0,  # Will be set by caller
             query=query_str,
             mode="research",
-            iterations=result.iterations if hasattr(result, 'iterations') else 1,
-            confidence=result.confidence if hasattr(result, 'confidence') else 0.0,
+            iterations=getattr(result, 'total_iterations', None) or getattr(result, 'iterations', 1),
+            confidence=getattr(result, 'final_confidence', None) or getattr(result, 'confidence', 0.0),
             is_exhaustive=exhaustive,
+            total_unique_nodes=len(final_nodes),
         )
     except Exception as e:
         logger.error(f"Research failed: {e}")

@@ -151,10 +151,12 @@ def _init_settings(config: RAGConfig):
     """Initialize LlamaIndex Settings for query operations."""
     from llama_index.core import Settings
     from embeddings import get_embedding_model
+    from retrieval import get_llm
 
     # Suppress stdout during init — Voyage tracker prints usage stats
     with _SuppressStdout():
         Settings.embed_model = get_embedding_model(config.embedding)
+        Settings.llm = get_llm(config)
 
 
 # === COMMANDS ===
