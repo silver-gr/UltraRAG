@@ -163,26 +163,26 @@ def login_ui() -> AuthContext | None:
 
     users_path = _users_path()
 
-    st.title("UltraRAG Login")
-    st.caption("Sign in to access UltraRAG.")
+    st.title("Σύνδεση UltraRAG")
+    st.caption("Συνδεθείτε για πρόσβαση στο UltraRAG.")
 
     if not users_path.exists() and _auth_enabled():
         st.error(
-            "Authentication is enabled but users DB is missing. "
-            "Run: python -m scripts.manage_users init --admin <username>"
+            "Η αυθεντικοποίηση είναι ενεργή αλλά η βάση χρηστών λείπει. "
+            "Εκτέλεσε: python -m scripts.manage_users init --admin <username>"
         )
         st.stop()
 
     with st.form("login_form", clear_on_submit=False):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Login", type="primary")
+        username = st.text_input("Όνομα χρήστη")
+        password = st.text_input("Κωδικός", type="password")
+        submitted = st.form_submit_button("Σύνδεση", type="primary")
 
     if submitted:
         users_db = load_users(users_path)
         user = _find_user(users_db, username.strip())
         if not user or not verify_password(password, user.get("password_hash", "")):
-            st.error("Invalid username or password")
+            st.error("Λάθος όνομα χρήστη ή κωδικός")
             return None
 
         ctx = AuthContext(username=user["username"], role=user["role"])
@@ -190,7 +190,7 @@ def login_ui() -> AuthContext | None:
         st.rerun()
 
     if _allow_signup():
-        st.caption("Signup is enabled by configuration but not implemented in-app.")
+        st.caption("Η εγγραφή είναι ενεργοποιημένη αλλά δεν έχει υλοποιηθεί ακόμα.")
 
     return None
 
@@ -217,5 +217,5 @@ def is_admin(ctx: AuthContext) -> bool:
 
 def require_admin(ctx: AuthContext) -> None:
     if not is_admin(ctx):
-        st.error("Admin role required for this action.")
+        st.error("Απαιτούνται δικαιώματα διαχειριστή.")
         st.stop()

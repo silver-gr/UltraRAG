@@ -17,7 +17,7 @@ class QueryCooldownError(RateLimitError):
     """Raised when per-user query cooldown is active."""
 
     def __init__(self, remaining_seconds: float):
-        super().__init__(f"Please wait {remaining_seconds:.1f}s before the next query.")
+        super().__init__(f"Παρακαλώ περίμενε {remaining_seconds:.1f}δ πριν το επόμενο ερώτημα.")
         self.remaining_seconds = remaining_seconds
 
 

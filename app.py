@@ -446,13 +446,13 @@ def render_stats_pills(cited_count: int, original_count: int, word_count: int,
                        saved: bool = True) -> str:
     """Render execution statistics as styled pill badges."""
     if research_mode:
-        sources_text = f"Cited {cited_count}/{original_count}"
+        sources_text = f"Αναφορές {cited_count}/{original_count}"
     else:
         sources_text = str(cited_count)
 
     pills = [
-        f'<span class="stats-pill pill-sources"><span class="pill-icon">&#x1F4DA;</span> <span class="pill-value">{sources_text}</span> sources</span>',
-        f'<span class="stats-pill pill-words"><span class="pill-icon">&#x270F;</span> <span class="pill-value">{word_count:,}</span> words</span>',
+        f'<span class="stats-pill pill-sources"><span class="pill-icon">&#x1F4DA;</span> <span class="pill-value">{sources_text}</span> πηγές</span>',
+        f'<span class="stats-pill pill-words"><span class="pill-icon">&#x270F;</span> <span class="pill-value">{word_count:,}</span> λέξεις</span>',
         f'<span class="stats-pill pill-time"><span class="pill-icon">&#x23F1;</span> <span class="pill-value">{time_str}</span></span>',
     ]
 
@@ -480,22 +480,22 @@ def render_copy_buttons(clean_text: str, linked_text: str):
     wrapped in expanders for clean UI.
     """
     st.markdown("---")
-    st.markdown("**📋 Copy Answer**")
+    st.markdown("**📋 Αντιγραφή απάντησης**")
 
     col1, col2 = st.columns(2)
 
     with col1:
-        with st.expander("📋 Clean Text (no citations)", expanded=False):
+        with st.expander("📋 Καθαρό κείμενο (χωρίς παραπομπές)", expanded=False):
             st.code(clean_text, language=None)
 
     with col2:
-        with st.expander("🔗 With Wikilinks", expanded=False):
+        with st.expander("🔗 Με Wikilinks", expanded=False):
             st.code(linked_text, language=None)
 
 
 # Page config
 st.set_page_config(
-    page_title="UltraRAG - Obsidian Knowledge Assistant",
+    page_title="UltraRAG - Βοηθός Γνώσης Obsidian",
     page_icon="/app/static/favicon-32.png",
     layout="wide"
 )
@@ -1332,7 +1332,7 @@ if AUTOLOAD_INDEX and st.session_state.rag is None:
         st.session_state.autoload_attempted = True
 
 
-@st.dialog("⚙️ Settings", width="large")
+@st.dialog("⚙️ Ρυθμίσεις", width="large")
 def settings_dialog(ctx):
     """Settings dialog for file exclusions and other configuration."""
     require_admin(ctx)
@@ -1340,60 +1340,60 @@ def settings_dialog(ctx):
     db_path = str(config.vector_db.lancedb_path)
     vault_path = config.vault_path
 
-    st.subheader("📁 File Exclusions")
-    st.caption("Exclude files or folders from indexing using patterns")
+    st.subheader("📁 Εξαιρέσεις αρχείων")
+    st.caption("Εξαίρεση αρχείων ή φακέλων από την ευρετηρίαση με μοτίβα")
 
     # Pattern input section
     col1, col2 = st.columns([3, 1])
     with col1:
         pattern = st.text_input(
-            "Add exclusion pattern",
+            "Προσθήκη μοτίβου εξαίρεσης",
             placeholder="Archive/** or *.excalidraw.md or ^Daily.*2023",
             key="exclusion_pattern_input"
         )
     with col2:
         pattern_type = st.selectbox(
-            "Type",
+            "Τύπος",
             ["glob", "exact", "regex"],
             key="exclusion_type_select",
-            help="glob: wildcards like *, **\nexact: exact path match\nregex: regular expression"
+            help="glob: μπαλαντέρ όπως *, **\nexact: ακριβές μονοπάτι\nregex: κανονική έκφραση"
         )
 
     # Pattern help
-    with st.expander("📖 Pattern Examples"):
+    with st.expander("📖 Παραδείγματα μοτίβων"):
         st.markdown("""
-        | Type | Pattern | Matches |
-        |------|---------|---------|
-        | glob | `Archive/**` | All files in Archive/ |
-        | glob | `*.excalidraw.md` | All Excalidraw files |
-        | glob | `**/drafts/*` | Any 'drafts' folder |
-        | exact | `Projects/old-project.md` | Specific file |
-        | regex | `^Daily.*2023` | Daily notes from 2023 |
+        | Τύπος | Μοτίβο | Αντιστοιχεί |
+        |-------|--------|-------------|
+        | glob | `Archive/**` | Όλα τα αρχεία στο Archive/ |
+        | glob | `*.excalidraw.md` | Όλα τα αρχεία Excalidraw |
+        | glob | `**/drafts/*` | Οποιοσδήποτε φάκελος 'drafts' |
+        | exact | `Projects/old-project.md` | Συγκεκριμένο αρχείο |
+        | regex | `^Daily.*2023` | Ημερήσιες σημειώσεις από 2023 |
         """)
 
     # Preview and Add buttons
     col_preview, col_add = st.columns(2)
 
     with col_preview:
-        if st.button("👁️ Preview Matches", disabled=not pattern):
+        if st.button("👁️ Προεπισκόπηση", disabled=not pattern):
             if pattern:
                 preview = preview_exclusions(
                     [{"pattern": pattern, "type": pattern_type}],
                     vault_path
                 )
                 if preview["excluded_count"] > 0:
-                    st.info(f"Would exclude **{preview['excluded_count']}** of {preview['total_files']} files")
+                    st.info(f"Θα εξαιρεθούν **{preview['excluded_count']}** από {preview['total_files']} αρχεία")
                     # Show first 10 matches
-                    with st.expander(f"Matching files ({min(10, preview['excluded_count'])} of {preview['excluded_count']})"):
+                    with st.expander(f"Αρχεία ({min(10, preview['excluded_count'])} από {preview['excluded_count']})"):
                         for path, _ in preview["excluded_files"][:10]:
                             st.text(f"  📄 {path}")
                         if preview["excluded_count"] > 10:
                             st.caption(f"... and {preview['excluded_count'] - 10} more")
                 else:
-                    st.warning("No files match this pattern")
+                    st.warning("Κανένα αρχείο δεν αντιστοιχεί")
 
     with col_add:
-        if st.button("➕ Add Pattern", type="primary", disabled=not pattern):
+        if st.button("➕ Προσθήκη", type="primary", disabled=not pattern):
             if pattern:
                 try:
                     # Add to settings
@@ -1413,9 +1413,9 @@ def settings_dialog(ctx):
                         ]
                         with run_with_limits(ctx, "delete_from_index"):
                             deleted = delete_from_index(db_path, file_paths)
-                        st.success(f"✅ Added exclusion. Removed {deleted} chunks from index.")
+                        st.success(f"✅ Προστέθηκε εξαίρεση. Αφαιρέθηκαν {deleted} τμήματα από το ευρετήριο.")
                     else:
-                        st.success("✅ Added exclusion pattern.")
+                        st.success("✅ Προστέθηκε μοτίβο εξαίρεσης.")
 
                     st.rerun()
                 except Exception as e:
@@ -1424,16 +1424,16 @@ def settings_dialog(ctx):
     st.divider()
 
     # Current exclusions list
-    st.subheader("Current Exclusions")
+    st.subheader("Τρέχουσες εξαιρέσεις")
     exclusions = get_exclusions(db_path)
 
     if not exclusions:
-        st.info("No exclusion patterns configured")
+        st.info("Δεν υπάρχουν μοτίβα εξαίρεσης")
     else:
         # Count total excluded files
         all_patterns = [{"pattern": e["pattern"], "type": e["type"]} for e in exclusions]
         total_preview = preview_exclusions(all_patterns, vault_path)
-        st.caption(f"💡 Total: {total_preview['excluded_count']} files excluded from indexing")
+        st.caption(f"💡 Σύνολο: {total_preview['excluded_count']} αρχεία εξαιρούνται από την ευρετηρίαση")
 
         # Display each exclusion with delete button
         for exc in exclusions:
@@ -1446,22 +1446,22 @@ def settings_dialog(ctx):
                     vault_path
                 )
                 st.text(f"📁 {exc['pattern']}")
-                st.caption(f"Matches {single_preview['excluded_count']} files")
+                st.caption(f"Αντιστοιχεί σε {single_preview['excluded_count']} αρχεία")
 
             with col_type:
                 st.caption(exc["type"])
 
             with col_delete:
-                if st.button("🗑️", key=f"del_{exc['pattern']}_{exc['type']}", help="Remove pattern"):
+                if st.button("🗑️", key=f"del_{exc['pattern']}_{exc['type']}", help="Αφαίρεση μοτίβου"):
                     try:
                         remove_exclusion(db_path, exc["pattern"], exc["type"])
-                        st.success(f"Removed: {exc['pattern']}")
+                        st.success(f"Αφαιρέθηκε: {exc['pattern']}")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error: {e}")
 
 
-@st.dialog("LLM Token Usage & Costs", width="large")
+@st.dialog("Χρήση & Κόστος LLM", width="large")
 def llm_usage_dialog(ctx):
     """Dialog showing daily LLM token usage and costs in EUR with VAT."""
     require_admin(ctx)
@@ -1476,20 +1476,20 @@ def llm_usage_dialog(ctx):
     # Summary metrics
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        st.metric("Total Tokens", f"{stats['total_tokens']:,}")
+        st.metric("Συνολικά tokens", f"{stats['total_tokens']:,}")
     with col2:
-        st.metric("Cost (EUR)", f"€{total_cost_eur:.4f}")
+        st.metric("Κόστος (EUR)", f"€{total_cost_eur:.4f}")
     with col3:
-        st.metric("VAT (24%)", f"€{total_vat:.4f}")
+        st.metric("ΦΠΑ (24%)", f"€{total_vat:.4f}")
     with col4:
-        st.metric("Total + VAT", f"€{total_with_vat:.4f}")
+        st.metric("Σύνολο + ΦΠΑ", f"€{total_with_vat:.4f}")
     with col5:
-        st.metric("Days", stats['days_tracked'])
+        st.metric("Ημέρες", stats['days_tracked'])
 
     st.divider()
 
     # Daily breakdown table with EUR and VAT
-    st.subheader("Daily Breakdown")
+    st.subheader("Ημερήσια ανάλυση")
 
     # Get raw daily usage and convert to EUR with VAT
     daily_usage = tracker.get_all_daily_usage()[:30]
@@ -1520,20 +1520,20 @@ def llm_usage_dialog(ctx):
             use_container_width=True,
             hide_index=True,
             column_config={
-                "Date": st.column_config.TextColumn("Date", width="small"),
+                "Date": st.column_config.TextColumn("Ημ/νία", width="small"),
                 "Input Tokens": st.column_config.TextColumn("Input", width="small"),
                 "Output Tokens": st.column_config.TextColumn("Output", width="small"),
                 "Requests": st.column_config.NumberColumn("Req", width="small"),
                 "Cost €": st.column_config.TextColumn("Cost €", width="small"),
-                "VAT €": st.column_config.TextColumn("VAT €", width="small"),
-                "Total+VAT": st.column_config.TextColumn("Total", width="small"),
+                "VAT €": st.column_config.TextColumn("ΦΠΑ €", width="small"),
+                "Total+VAT": st.column_config.TextColumn("Σύνολο", width="small"),
             }
         )
     else:
-        st.info("No usage data recorded yet. Token tracking starts when you make queries.")
+        st.info("Δεν υπάρχουν δεδομένα χρήσης ακόμα. Η καταγραφή ξεκινά με το πρώτο ερώτημα.")
 
     # Pricing info with EUR
-    with st.expander("Gemini Pricing Reference (EUR)"):
+    with st.expander("Τιμοκατάλογος Gemini (EUR)"):
         # Convert USD prices to EUR
         flash_in = 0.50 * CURRENCY_EXCHANGE_RATE
         flash_out = 3.00 * CURRENCY_EXCHANGE_RATE
@@ -1550,30 +1550,30 @@ def llm_usage_dialog(ctx):
         | gemini-2.5-flash | €{flash25_in:.2f} | €{flash25_out:.2f} |
         | gemini-flash-latest | €{flash25_in:.2f} | €{flash25_out:.2f} |
 
-        *Exchange rate: 1 USD = {CURRENCY_EXCHANGE_RATE} EUR | VAT: {int(VAT_RATE * 100)}%*
+        *Ισοτιμία: 1 USD = {CURRENCY_EXCHANGE_RATE} EUR | VAT: {int(VAT_RATE * 100)}%*
 
-        *Token counts are estimated when actual counts are unavailable.*
+        *Τα tokens είναι εκτιμήσεις όταν δεν υπάρχουν ακριβή δεδομένα.*
         """)
 
     # Reset button (with confirmation)
     st.divider()
     col_reset, col_spacer = st.columns([1, 3])
     with col_reset:
-        if st.button("Reset Usage Data", type="secondary"):
+        if st.button("Επαναφορά δεδομένων", type="secondary"):
             st.session_state.confirm_reset_llm_usage = True
 
     if st.session_state.get("confirm_reset_llm_usage", False):
-        st.warning("Are you sure? This will delete all usage history.")
+        st.warning("Σίγουρα; Θα διαγραφεί όλο το ιστορικό χρήσης.")
         col_yes, col_no = st.columns(2)
         with col_yes:
-            if st.button("Yes, Reset", type="primary"):
+            if st.button("Ναι, επαναφορά", type="primary"):
                 with run_with_limits(ctx, "reset_llm_usage"):
                     tracker.reset_usage(confirm=True)
                 st.session_state.confirm_reset_llm_usage = False
-                st.success("Usage data reset!")
+                st.success("Τα δεδομένα επαναφέρθηκαν!")
                 st.rerun()
         with col_no:
-            if st.button("Cancel"):
+            if st.button("Ακύρωση"):
                 st.session_state.confirm_reset_llm_usage = False
                 st.rerun()
 
@@ -1583,7 +1583,7 @@ def main():
     admin_mode = is_admin(ctx)
 
     st.title("UltraRAG")
-    st.markdown('<p class="hero-subtitle">Knowledge retrieval for your Obsidian vault</p>', unsafe_allow_html=True)
+    st.markdown('<p class="hero-subtitle">Ανάκτηση γνώσης από το Obsidian vault σου</p>', unsafe_allow_html=True)
     
     # Sidebar for configuration
     with st.sidebar:
@@ -1597,15 +1597,15 @@ def main():
             unsafe_allow_html=True
         )
 
-        st.caption(f"Logged in as **{ctx.username}** ({ctx.role})")
-        if st.button("Logout", use_container_width=True):
+        st.caption(f"Συνδεδεμένος ως **{ctx.username}** ({ctx.role})")
+        if st.button("Αποσύνδεση", use_container_width=True):
             logout()
             st.rerun()
 
         # Check if .env exists
         if not Path(".env").exists():
-            st.error("⚠️ .env file not found!")
-            st.info("Copy .env.example to .env and configure your settings.")
+            st.error("⚠️ Το αρχείο .env δεν βρέθηκε!")
+            st.info("Αντέγραψε το .env.example σε .env και ρύθμισε τις παραμέτρους.")
             return
         
         # Check for existing index
@@ -1635,44 +1635,44 @@ def main():
 
         # Admin-only mutating controls
         if admin_mode:
-            with st.expander("Admin", expanded=True):
+            with st.expander("Διαχείριση", expanded=True):
                 # Show appropriate buttons based on state
                 if not st.session_state.rag:
                     if has_existing_index:
-                        st.success("📦 Existing index found!")
-                        if st.button("🚀 Load Existing Index", type="primary"):
-                            with st.spinner("Loading RAG system and existing index..."):
+                        st.success("📦 Βρέθηκε υπάρχον ευρετήριο!")
+                        if st.button("🚀 Φόρτωση ευρετηρίου", type="primary"):
+                            with st.spinner("Φόρτωση συστήματος και ευρετηρίου..."):
                                 try:
                                     with run_with_limits(ctx, "load_existing_index"):
                                         st.session_state.rag = UltraRAG()
                                         if st.session_state.rag.load_existing_index():
                                             st.session_state.indexed = True
-                                            st.success("✅ Index loaded!")
+                                            st.success("✅ Το ευρετήριο φορτώθηκε!")
                                             st.rerun()
                                         else:
-                                            st.error("Failed to load index")
+                                            st.error("Αποτυχία φόρτωσης ευρετηρίου")
                                 except SystemBusyError as e:
                                     st.error(str(e))
                                 except Exception as e:
                                     st.error(f"❌ Error: {e}")
 
-                        if st.button("🔄 Create New Index"):
-                            with st.spinner("Initializing RAG system..."):
+                        if st.button("🔄 Νέο ευρετήριο"):
+                            with st.spinner("Αρχικοποίηση συστήματος..."):
                                 try:
                                     with run_with_limits(ctx, "init_system"):
                                         st.session_state.rag = UltraRAG()
-                                    st.success("✅ System initialized!")
+                                    st.success("✅ Το σύστημα αρχικοποιήθηκε!")
                                 except SystemBusyError as e:
                                     st.error(str(e))
                                 except Exception as e:
                                     st.error(f"❌ Error: {e}")
                     else:
-                        if st.button("🚀 Initialize System", type="primary"):
-                            with st.spinner("Initializing RAG system..."):
+                        if st.button("🚀 Αρχικοποίηση", type="primary"):
+                            with st.spinner("Αρχικοποίηση συστήματος..."):
                                 try:
                                     with run_with_limits(ctx, "init_system"):
                                         st.session_state.rag = UltraRAG()
-                                    st.success("✅ System initialized!")
+                                    st.success("✅ Το σύστημα αρχικοποιήθηκε!")
                                 except SystemBusyError as e:
                                     st.error(str(e))
                                 except Exception as e:
@@ -1680,13 +1680,13 @@ def main():
 
                 # Index button (only show if initialized but not indexed)
                 if st.session_state.rag and not st.session_state.indexed:
-                    if st.button("📚 Index Vault"):
-                        with st.spinner("Indexing vault (this may take several minutes)..."):
+                    if st.button("📚 Ευρετηρίαση vault"):
+                        with st.spinner("Ευρετηρίαση vault (μπορεί να πάρει μερικά λεπτά)..."):
                             try:
                                 with run_with_limits(ctx, "index_vault"):
                                     st.session_state.rag.index_vault()
                                 st.session_state.indexed = True
-                                st.success("✅ Vault indexed!")
+                                st.success("✅ Το vault ευρετηριάστηκε!")
                                 st.balloons()
                             except SystemBusyError as e:
                                 st.error(str(e))
@@ -1696,86 +1696,86 @@ def main():
                 # Conversations section
                 if st.session_state.rag and st.session_state.indexed:
                     st.divider()
-                    st.subheader("AI Conversations")
+                    st.subheader("Συνομιλίες AI")
 
                     config = st.session_state.rag.config
                     has_conv_path = config.conversations.path and config.conversations.path.exists()
                     has_conv_index = st.session_state.rag.conversations_index_exists()
 
                     if has_conv_index or st.session_state.conversations_indexed:
-                        st.success("🟢 Conversations indexed")
+                        st.success("🟢 Συνομιλίες ευρετηριασμένες")
                         st.session_state.conversations_indexed = True
 
                     elif has_conv_path:
                         st.info(f"📁 Found: {config.conversations.path}")
-                        if st.button("📚 Index Conversations"):
-                            with st.spinner("Indexing AI conversations..."):
+                        if st.button("📚 Ευρετηρίαση συνομιλιών"):
+                            with st.spinner("Ευρετηρίαση συνομιλιών AI..."):
                                 try:
                                     with run_with_limits(ctx, "index_conversations"):
                                         st.session_state.rag.index_conversations(force_reindex=False, interactive=False)
                                     st.session_state.conversations_indexed = True
-                                    st.success("✅ Conversations indexed!")
+                                    st.success("✅ Οι συνομιλίες ευρετηριάστηκαν!")
                                     st.rerun()
                                 except SystemBusyError as e:
                                     st.error(str(e))
                                 except Exception as e:
                                     st.error(f"❌ Error: {e}")
                     else:
-                        st.info("Set CONVERSATIONS_PATH in .env")
+                        st.info("Ρύθμισε CONVERSATIONS_PATH στο .env")
 
                 # Books section
                 if st.session_state.rag and st.session_state.indexed:
                     config = st.session_state.rag.config
                     if config.books.enabled:
                         st.divider()
-                        st.subheader("Books")
+                        st.subheader("Βιβλία")
                         has_books_idx = st.session_state.rag.books_index_exists()
                         books_in_mem = getattr(st.session_state.rag, 'books_index', None) is not None
                         if has_books_idx:
                             n_nodes = len(getattr(st.session_state.rag, 'books_nodes', None) or [])
                             if books_in_mem:
-                                st.success(f"🟢 Books ready ({n_nodes:,} chunks)")
+                                st.success(f"🟢 Βιβλία έτοιμα ({n_nodes:,} τμήματα)")
                             else:
-                                st.info("📚 Books indexed — loaded on demand")
+                                st.info("📚 Βιβλία ευρετηριασμένα — φόρτωση κατ' απαίτηση")
                         else:
-                            st.info("Set BOOKS_PATH in .env and index books")
+                            st.info("Ρύθμισε BOOKS_PATH στο .env")
 
                 # RAPTOR section
                 if st.session_state.rag and st.session_state.indexed:
                     st.divider()
-                    st.subheader("RAPTOR Summaries")
+                    st.subheader("Περιλήψεις RAPTOR")
 
                     config = st.session_state.rag.config
                     has_raptor = st.session_state.rag.raptor_index_exists()
 
                     if has_raptor:
-                        st.success("🟢 RAPTOR index ready")
+                        st.success("🟢 Ευρετήριο RAPTOR έτοιμο")
                         stats = st.session_state.rag.get_raptor_stats()
                         st.caption(f"Mode: {stats.get('default_mode', 'collapsed')} | Nodes: {stats.get('node_count', 'unknown')}")
                     elif config.raptor.enabled:
-                        st.info("RAPTOR enabled but not indexed")
-                        if st.button("🌳 Build RAPTOR Index"):
-                            with st.spinner("Building RAPTOR hierarchical summaries (this may take several minutes)..."):
+                        st.info("RAPTOR ενεργοποιημένο αλλά μη ευρετηριασμένο")
+                        if st.button("🌳 Δημιουργία ευρετηρίου RAPTOR"):
+                            with st.spinner("Δημιουργία ιεραρχικών περιλήψεων RAPTOR (μπορεί να πάρει λεπτά)..."):
                                 try:
                                     with run_with_limits(ctx, "index_raptor"):
                                         st.session_state.rag.index_raptor(force_reindex=False, interactive=False)
-                                    st.success("✅ RAPTOR index built!")
+                                    st.success("✅ Το ευρετήριο RAPTOR δημιουργήθηκε!")
                                     st.rerun()
                                 except SystemBusyError as e:
                                     st.error(str(e))
                                 except Exception as e:
                                     st.error(f"❌ Error: {e}")
                     else:
-                        st.info("Set ENABLE_RAPTOR=true in .env")
+                        st.info("Ρύθμισε ENABLE_RAPTOR=true στο .env")
 
                 if st.session_state.indexed:
                     st.divider()
                     col_settings, col_usage = st.columns(2)
                     with col_settings:
-                        if st.button("⚙️ Settings", use_container_width=True):
+                        if st.button("⚙️ Ρυθμίσεις", use_container_width=True):
                             settings_dialog(ctx)
                     with col_usage:
-                        if st.button("💰 LLM Costs", use_container_width=True):
+                        if st.button("💰 Κόστος LLM", use_container_width=True):
                             llm_usage_dialog(ctx)
 
         # System status (compact)
@@ -1788,15 +1788,15 @@ def main():
             st.caption(f"{emb_short} / {config.vector_db.db_type.upper()} / {llm_short}")
 
             if st.session_state.indexed:
-                auto_note = " (auto)" if st.session_state.autoload_attempted else ""
+                auto_note = " (αυτόματο)" if st.session_state.autoload_attempted else ""
                 if st.session_state.conversations_indexed:
-                    st.success(f"🟢 Federated ready{auto_note}")
+                    st.success(f"🟢 Ομοσπονδιακή αναζήτηση έτοιμη{auto_note}")
                 else:
-                    st.success(f"🟢 Vault ready{auto_note}")
+                    st.success(f"🟢 Vault έτοιμο{auto_note}")
             else:
-                st.warning("🟡 Not indexed")
+                st.warning("🟡 Χωρίς ευρετήριο")
         else:
-            st.info("Not initialized")
+            st.info("Μη αρχικοποιημένο")
 
         # Date filter (compact, only show when indexed)
         if st.session_state.indexed:
@@ -1809,17 +1809,17 @@ def main():
                 current_idx = preset_values.index(st.session_state.date_filter)
 
             selected_label = st.selectbox(
-                "📅 Date Filter",
+                "📅 Φίλτρο ημερομηνίας",
                 options=preset_labels,
                 index=current_idx,
-                help="Filter results by date"
+                help="Φιλτράρισμα κατά ημερομηνία"
             )
             selected_idx = preset_labels.index(selected_label)
             st.session_state.date_filter = preset_values[selected_idx]
         
         # Query history (persistent, clickable)
         st.divider()
-        st.subheader("History")
+        st.subheader("Ιστορικό")
         persistent_history = load_query_history(ctx.username)
         if persistent_history:
             # Show most recent 15 queries (reversed for newest first)
@@ -1842,17 +1842,17 @@ def main():
                         st.session_state.loaded_history_result = entry
                         st.rerun()
         else:
-            st.caption("No queries yet")
+            st.caption("Δεν υπάρχουν ερωτήματα")
     
     # Main content area
     if not st.session_state.indexed:
         if not admin_mode:
-            st.warning("The knowledge index is not ready. Ask an admin to initialize/index the system.")
+            st.warning("Το ευρετήριο γνώσης δεν είναι έτοιμο. Ζήτησε από τον διαχειριστή να αρχικοποιήσει το σύστημα.")
         st.markdown("""
         <div class="empty-state">
             <div class="empty-icon">&#x1F50D;</div>
-            <div class="empty-title">Initialize your vault to get started</div>
-            <div class="empty-desc">Use the sidebar to load an existing index or create a new one from your Obsidian vault.</div>
+            <div class="empty-title">Αρχικοποίησε το vault σου για να ξεκινήσεις</div>
+            <div class="empty-desc">Χρησιμοποίησε την πλαϊνή μπάρα για φόρτωση ευρετηρίου ή δημιουργία νέου.</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1861,29 +1861,29 @@ def main():
         <div class="feature-grid">
             <div class="feature-card">
                 <span class="feature-icon">&#x1F3AF;</span>
-                <div class="feature-title">Smart Retrieval</div>
+                <div class="feature-title">Έξυπνη ανάκτηση</div>
                 <ul class="feature-list">
-                    <li>Semantic search with reranking</li>
-                    <li>Wikilink graph traversal</li>
-                    <li>Temporal filtering</li>
+                    <li>Σημασιολογική αναζήτηση με επανακατάταξη</li>
+                    <li>Πλοήγηση γράφου Wikilinks</li>
+                    <li>Χρονικό φιλτράρισμα</li>
                 </ul>
             </div>
             <div class="feature-card">
                 <span class="feature-icon">&#x2728;</span>
-                <div class="feature-title">Advanced AI</div>
+                <div class="feature-title">Προηγμένη AI</div>
                 <ul class="feature-list">
-                    <li>Gemini 3 Flash with context caching</li>
-                    <li>Research mode with gap analysis</li>
-                    <li>Self-correcting retrieval</li>
+                    <li>Gemini 3 Flash με context caching</li>
+                    <li>Λειτουργία έρευνας με ανάλυση κενών</li>
+                    <li>Αυτοδιορθούμενη ανάκτηση</li>
                 </ul>
             </div>
             <div class="feature-card">
                 <span class="feature-icon">&#x1F4CA;</span>
-                <div class="feature-title">High Quality</div>
+                <div class="feature-title">Υψηλή ποιότητα</div>
                 <ul class="feature-list">
                     <li>Voyage AI embeddings</li>
-                    <li>Cross-encoder reranking</li>
-                    <li>Inline source citations</li>
+                    <li>Cross-encoder επανακατάταξη</li>
+                    <li>Ενσωματωμένες παραπομπές</li>
                 </ul>
             </div>
         </div>
@@ -1891,11 +1891,11 @@ def main():
     
     else:
         # Query interface
-        st.subheader("Ask a Question")
+        st.subheader("Κάνε μια ερώτηση")
 
         query = st.text_input(
-            "What would you like to know from your vault?",
-            placeholder="e.g., What are my notes about machine learning?",
+            "Τι θα ήθελες να μάθεις από το vault σου;",
+            placeholder="π.χ., Τι σημειώσεις έχω για μηχανική μάθηση;",
             key="query_input",
             max_chars=10000  # Security: Limit query length
         )
@@ -1903,7 +1903,7 @@ def main():
         # Search controls - Row 1: Button + Search type (conditionally shown)
         row1_col1, row1_col2 = st.columns([1, 4])
         with row1_col1:
-            search_button = st.button("Search", type="primary", use_container_width=True)
+            search_button = st.button("Αναζήτηση", type="primary", use_container_width=True)
 
         # Search controls - Row 2: Source checkboxes + Options
         has_raptor = st.session_state.rag.raptor_index_exists() if st.session_state.rag else False
@@ -1916,11 +1916,11 @@ def main():
         with src_col1:
             use_vault = st.checkbox("📓 Vault", value=True, key="src_vault")
         with src_col2:
-            use_convos = st.checkbox("💬 Convos", value=has_convos, key="src_convos", disabled=not has_convos)
+            use_convos = st.checkbox("💬 Συνομιλίες", value=has_convos, key="src_convos", disabled=not has_convos)
         with src_col3:
-            use_books = st.checkbox("📚 Books", value=has_books, key="src_books", disabled=not has_books)
+            use_books = st.checkbox("📚 Βιβλία", value=has_books, key="src_books", disabled=not has_books)
         with src_col4:
-            use_saved = st.checkbox("🔖 Saved", value=has_saved, key="src_saved", disabled=not has_saved)
+            use_saved = st.checkbox("🔖 Αποθηκευμένα", value=has_saved, key="src_saved", disabled=not has_saved)
 
         # Build source_filter — gate availability to prevent stale disabled-checkbox state
         source_filter = []
@@ -1934,7 +1934,7 @@ def main():
             source_filter.append("saved_items")
 
         if not source_filter:
-            st.warning("⚠️ Select at least one source.")
+            st.warning("⚠️ Επίλεξε τουλάχιστον μία πηγή.")
         has_selected_sources = bool(source_filter)
 
         # "Find Notes Only" only makes sense for vault-only
@@ -1942,13 +1942,13 @@ def main():
         with row1_col2:
             if vault_only:
                 search_type = st.radio(
-                    "Search type:",
-                    ["Full Answer", "Find Notes Only"],
+                    "Τύπος αναζήτησης:",
+                    ["Πλήρης απάντηση", "Μόνο σημειώσεις"],
                     horizontal=True,
                     label_visibility="collapsed"
                 )
             else:
-                search_type = "Full Answer"
+                search_type = "Πλήρης απάντηση"
                 st.empty()
 
         # search_scope kept for backwards-compat (history display key)
@@ -1956,15 +1956,15 @@ def main():
 
         with row2_col2:
             research_mode = st.checkbox(
-                "🔬 Research",
-                help="Multi-step retrieval with gap analysis. Use @all prefix for exhaustive search.",
+                "🔬 Έρευνα",
+                help="Πολυβηματική ανάκτηση με ανάλυση κενών. Χρήση @all για εξαντλητική αναζήτηση.",
                 value=False
             )
         with row2_col3:
             if has_raptor:
                 raptor_mode = st.checkbox(
                     "🌳 RAPTOR",
-                    help="Use hierarchical summaries for multi-document reasoning",
+                    help="Ιεραρχικές περιλήψεις για πολυεγγραφική ανάλυση",
                     value=False
                 )
             else:
@@ -1973,10 +1973,10 @@ def main():
         with row2_col4:
             max_sources_options = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 125, 150, 175, 200]
             max_sources = st.selectbox(
-                "Sources",
+                "Πηγές",
                 options=max_sources_options,
                 index=0,  # Default to 10
-                help="Maximum sources for synthesis",
+                help="Μέγιστος αριθμός πηγών για σύνθεση",
                 label_visibility="collapsed"
             )
 
@@ -1989,13 +1989,13 @@ def main():
         if has_books:
             categories = st.session_state.rag.get_book_categories()
             if categories:
-                with st.expander("Book Filters", expanded=False):
+                with st.expander("Φίλτρα βιβλίων", expanded=False):
                     cat_options = [f"{c['name']} ({c['count']})" for c in categories]
                     selected_cats = st.multiselect(
-                        "Categories",
+                        "Κατηγορίες",
                         options=cat_options,
                         key="book_cat_filter",
-                        help="Filter books by category (OR within selection)",
+                        help="Φιλτράρισμα βιβλίων κατά κατηγορία",
                     )
                     # Extract category names from "name (count)" display format
                     selected_cat_names = [
@@ -2005,10 +2005,10 @@ def main():
 
                     # Author filter
                     author_input = st.text_input(
-                        "Author filter",
+                        "Φίλτρο συγγραφέα",
                         placeholder="e.g. Cal Newport, James Clear",
                         key="book_author_filter",
-                        help="Comma-separated author names",
+                        help="Ονόματα συγγραφέων χωρισμένα με κόμμα",
                     )
                     selected_authors = (
                         [a.strip() for a in author_input.split(",") if a.strip()]
@@ -2021,7 +2021,7 @@ def main():
                             authors=selected_authors,
                         )
                         st.info(f"Filters active: {book_filter.to_lance_where()}")
-                        if st.button("Clear filters"):
+                        if st.button("Καθαρισμός φίλτρων"):
                             st.session_state["book_cat_filter"] = []
                             st.session_state["book_author_filter"] = ""
                             st.rerun()
@@ -2054,7 +2054,7 @@ def main():
             ), unsafe_allow_html=True)
 
             # Answer section
-            st.markdown(render_section_header("&#x1F4DD;", "Answer", icon_class="icon-answer"), unsafe_allow_html=True)
+            st.markdown(render_section_header("&#x1F4DD;", "Απάντηση", icon_class="icon-answer"), unsafe_allow_html=True)
             answer_with_links = linkify_citations(remapped_answer)
             st.markdown(f'<div class="answer-card">{answer_with_links}</div>', unsafe_allow_html=True)
 
@@ -2069,11 +2069,11 @@ def main():
 
             # Research details
             if research_mode and 'research_summary' in result:
-                with st.expander("Research Details", expanded=False):
+                with st.expander("Λεπτομέρειες έρευνας", expanded=False):
                     st.text(result['research_summary'])
 
             if research_mode and result.get('gap_analyses_markdown'):
-                with st.expander("Gap Analysis Insights", expanded=False):
+                with st.expander("Ανάλυση κενών", expanded=False):
                     st.markdown(result['gap_analyses_markdown'])
 
             # Federated source summary (show whenever multi-source result available)
@@ -2089,7 +2089,7 @@ def main():
                     st.info(f"Sources: {', '.join(parts)}")
 
             # Sources section
-            st.markdown(render_section_header("&#x1F4DA;", "Sources", str(cited_count), "icon-sources"), unsafe_allow_html=True)
+            st.markdown(render_section_header("&#x1F4DA;", "Πηγές", str(cited_count), "icon-sources"), unsafe_allow_html=True)
             for source in filtered_sources:
                 source_type = source.get('source_type', 'vault')
                 type_icon = SOURCE_ICONS.get(source_type, "📄")
@@ -2115,11 +2115,11 @@ def main():
                 time_str = "Unknown time"
 
             # Clear button
-            if st.button("✖ Clear History View", type="secondary"):
+            if st.button("✖ Κλείσιμο ιστορικού", type="secondary"):
                 st.session_state.loaded_history_result = None
                 st.rerun()
 
-            st.markdown(f"*Query from {time_str}:*")
+            st.markdown(f"*Ερώτημα από {time_str}:*")
             st.markdown(f"**{entry['query']}**")
 
             if entry.get('answer'):
@@ -2131,12 +2131,12 @@ def main():
                 cited_count = len(filtered_sources)
                 word_count = len(remapped_answer.split())
                 st.markdown(render_stats_pills(
-                    cited_count, len(original_sources), word_count, "from history",
+                    cited_count, len(original_sources), word_count, "από ιστορικό",
                     research_mode=False
                 ), unsafe_allow_html=True)
 
                 # Answer section
-                st.markdown(render_section_header("&#x1F4DD;", "Answer", icon_class="icon-answer"), unsafe_allow_html=True)
+                st.markdown(render_section_header("&#x1F4DD;", "Απάντηση", icon_class="icon-answer"), unsafe_allow_html=True)
                 answer_with_links = linkify_citations(remapped_answer)
                 st.markdown(f'<div class="answer-card">{answer_with_links}</div>', unsafe_allow_html=True)
 
@@ -2151,12 +2151,12 @@ def main():
 
                 # Gap analyses
                 if entry.get('gap_analyses_markdown'):
-                    with st.expander("Gap Analysis Insights", expanded=False):
+                    with st.expander("Ανάλυση κενών", expanded=False):
                         st.markdown(entry['gap_analyses_markdown'])
 
                 # Sources section
                 if filtered_sources:
-                    st.markdown(render_section_header("&#x1F4DA;", "Sources", str(cited_count), "icon-sources"), unsafe_allow_html=True)
+                    st.markdown(render_section_header("&#x1F4DA;", "Πηγές", str(cited_count), "icon-sources"), unsafe_allow_html=True)
                     for source in filtered_sources:
                         source_type = source.get('source_type', 'vault')
                         type_icon = SOURCE_ICONS.get(source_type, "📄")
@@ -2169,7 +2169,7 @@ def main():
                             cleaned = clean_excerpt_for_display(source.get('excerpt', ''))
                             st.markdown(cleaned)
             else:
-                st.info("No answer stored for this query.")
+                st.info("Δεν υπάρχει αποθηκευμένη απάντηση.")
 
         # Security: Validate query input
         elif search_button and query:
@@ -2178,20 +2178,20 @@ def main():
 
             # Validate source selection and query text
             if not has_selected_sources:
-                st.error("Select at least one source before searching.")
+                st.error("Επίλεξε τουλάχιστον μία πηγή πριν την αναζήτηση.")
             elif not query.strip():
-                st.error("Please enter a valid query (non-empty).")
+                st.error("Εισάγετε ένα έγκυρο ερώτημα.")
             elif len(query) > 10000:
-                st.error("Query is too long. Please limit to 10,000 characters.")
+                st.error("Το ερώτημα είναι πολύ μεγάλο. Μέγιστο 10.000 χαρακτήρες.")
             else:
 
                 # Show appropriate spinner message
                 if raptor_mode:
-                    spinner_message = "Searching RAPTOR hierarchical summaries..."
+                    spinner_message = "Αναζήτηση στις ιεραρχικές περιλήψεις RAPTOR..."
                 elif research_mode:
-                    spinner_message = "Researching knowledge base (this may take 30-60 seconds)..."
+                    spinner_message = "Έρευνα στη βάση γνώσης (μπορεί να πάρει 30-60 δευτερόλεπτα)..."
                 else:
-                    spinner_message = "Searching knowledge base..."
+                    spinner_message = "Αναζήτηση στη βάση γνώσης..."
 
                 # Capture token usage before query
                 llm_tracker = get_llm_tracker()
@@ -2204,7 +2204,7 @@ def main():
                             # Get current date filter from session state
                             date_filter = st.session_state.date_filter
 
-                            if search_type == "Full Answer":
+                            if search_type == "Πλήρης απάντηση":
                                 # Determine which query method to use based on source checkboxes.
                                 # We pass max_sources=None to get ALL sources for proper citation matching.
                                 if raptor_mode:
@@ -2268,7 +2268,7 @@ def main():
                                 ), unsafe_allow_html=True)
 
                                 # Answer section
-                                st.markdown(render_section_header("&#x1F4DD;", "Answer", icon_class="icon-answer"), unsafe_allow_html=True)
+                                st.markdown(render_section_header("&#x1F4DD;", "Απάντηση", icon_class="icon-answer"), unsafe_allow_html=True)
                                 answer_with_links = linkify_citations(remapped_answer)
                                 st.markdown(f'<div class="answer-card">{answer_with_links}</div>', unsafe_allow_html=True)
 
@@ -2283,11 +2283,11 @@ def main():
 
                                 # Research details
                                 if research_mode and 'research_summary' in result:
-                                    with st.expander("Research Details", expanded=False):
+                                    with st.expander("Λεπτομέρειες έρευνας", expanded=False):
                                         st.text(result['research_summary'])
 
                                 if research_mode and result.get('gap_analyses_markdown'):
-                                    with st.expander("Gap Analysis Insights", expanded=False):
+                                    with st.expander("Ανάλυση κενών", expanded=False):
                                         st.markdown(result['gap_analyses_markdown'])
 
                                 # Federated source summary (show whenever multi-source result available)
@@ -2303,7 +2303,7 @@ def main():
                                         st.info(f"Sources: {', '.join(parts)}")
 
                                 # Sources section
-                                st.markdown(render_section_header("&#x1F4DA;", "Sources", str(cited_count), "icon-sources"), unsafe_allow_html=True)
+                                st.markdown(render_section_header("&#x1F4DA;", "Πηγές", str(cited_count), "icon-sources"), unsafe_allow_html=True)
                                 for source in filtered_sources:
                                     source_type = source.get('source_type', 'vault')
                                     type_icon = SOURCE_ICONS.get(source_type, "📄")
@@ -2319,7 +2319,7 @@ def main():
                                 # Just retrieve relevant notes
                                 notes = st.session_state.rag.search_notes(query, top_k=max_sources, date_filter=date_filter)
 
-                                st.markdown(render_section_header("&#x1F4DA;", "Relevant Notes", str(len(notes)), "icon-sources"), unsafe_allow_html=True)
+                                st.markdown(render_section_header("&#x1F4DA;", "Σχετικές σημειώσεις", str(len(notes)), "icon-sources"), unsafe_allow_html=True)
                                 for note in notes:
                                     source_type = note.get('source_type', 'vault')
                                     with st.expander(
@@ -2338,13 +2338,13 @@ def main():
                         st.error(f"❌ Error: {e}")
         
         # Example queries
-        with st.expander("Example Queries"):
+        with st.expander("Παραδείγματα ερωτημάτων"):
             st.markdown("""
-            - What are my thoughts on [topic]?
-            - Show me all notes related to [project]
-            - What connections exist between [concept A] and [concept B]?
-            - Summarize my notes tagged with #important
-            - What did I write about [topic] in the last month?
+            - Ποιες είναι οι σκέψεις μου για [θέμα];
+            - Δείξε μου σημειώσεις σχετικές με [project]
+            - Τι συνδέσεις υπάρχουν μεταξύ [concept A] και [concept B];
+            - Σύνοψη σημειώσεων με ετικέτα #important
+            - Τι έγραψα για [θέμα] τον τελευταίο μήνα;
             """)
 
 

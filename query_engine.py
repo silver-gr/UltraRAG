@@ -304,16 +304,17 @@ Context information from the knowledge base:
 ---------------------
 
 Instructions:
+- LANGUAGE: Always respond in Greek (Ελληνικά). All output text must be in Greek.
 - PREMISE: What does the user already know based on their vault?
 - TASK: What specific question or need does the user have?
 - CONSTRAINTS: Only use information from the provided context. If uncertain, acknowledge limitations.
 - FORMAT: Provide clear, well-structured answers. Use inline citations [1], [2], etc. to reference specific sources.
-- CITATIONS: When using information from a source, add the source number in brackets immediately after the statement, e.g., "Habits form through repetition [3]."
-- **USER OVERRIDE**: If the user specifies a format in their query (e.g., "as a table", "in Greek", "bullet points only"), follow that format instead.
+- CITATIONS: When using information from a source, add the source number in brackets immediately after the statement, e.g., "Οι συνήθειες σχηματίζονται μέσω της επανάληψης [3]."
+- **USER OVERRIDE**: If the user specifies a different language or format in their query, follow that instead.
 
 Query: {query_str}
 
-Think through the relevant concepts from the knowledge base, then provide a comprehensive answer with inline citations:
+Think through the relevant concepts from the knowledge base, then provide a comprehensive answer in Greek with inline citations:
 """
 
 
@@ -330,16 +331,17 @@ Context from knowledge base ({num_sources} sources):
 Research Query: {query_str}
 
 INSTRUCTIONS FOR COMPREHENSIVE OUTPUT:
-1. **Be Exhaustive**: Include EVERY relevant piece of information from the sources. Do not summarize or abbreviate.
-2. **No Length Limits**: Generate as much content as needed - 5,000 to 10,000+ words is acceptable and encouraged.
-3. **Structure Clearly**: Use headers, bullet points, numbered lists, and sub-sections for organization.
-4. **Inline Citations**: Use [1], [2], [3] etc. to cite sources. Place the citation immediately after the statement it supports.
-   - Example: "The habit loop consists of cue, routine, and reward [3]. Implementation intentions increase success rates [7][12]."
+1. **Language**: Always respond in Greek (Ελληνικά). All output text must be in Greek.
+2. **Be Exhaustive**: Include EVERY relevant piece of information from the sources. Do not summarize or abbreviate.
+3. **No Length Limits**: Generate as much content as needed - 5,000 to 10,000+ words is acceptable and encouraged.
+4. **Structure Clearly**: Use headers, bullet points, numbered lists, and sub-sections for organization.
+5. **Inline Citations**: Use [1], [2], [3] etc. to cite sources. Place the citation immediately after the statement it supports.
+   - Example: "Ο κύκλος συνηθειών αποτελείται από σήμα, ρουτίνα και ανταμοιβή [3]. Οι προθέσεις υλοποίησης αυξάνουν τα ποσοστά επιτυχίας [7][12]."
    - Cite EVERY claim with at least one source number.
    - Multiple sources supporting the same point should be cited together: [3][7][12]
-5. **Categories**: Group related information into logical categories or themes.
-6. **Include Details**: Capture specific examples, techniques, frameworks, quotes, and actionable items.
-7. **Cross-References**: Note connections between different sources and concepts.
+6. **Categories**: Group related information into logical categories or themes.
+7. **Include Details**: Capture specific examples, techniques, frameworks, quotes, and actionable items.
+8. **Cross-References**: Note connections between different sources and concepts.
 
 OUTPUT FORMAT (default - use unless user specifies otherwise in their query):
 - Start with a brief executive summary (2-3 sentences)
@@ -348,9 +350,9 @@ OUTPUT FORMAT (default - use unless user specifies otherwise in their query):
 - Use inline citations [N] throughout to attribute information to sources
 - End with connections and insights across the material
 
-**IMPORTANT**: If the user's query contains specific formatting instructions (e.g., "as a table", "in bullet points", "JSON format", "Greek language"), FOLLOW THOSE INSTRUCTIONS and override the default format above. The user's explicit request takes priority.
+**IMPORTANT**: If the user's query contains specific formatting or language instructions, FOLLOW THOSE INSTRUCTIONS and override the defaults above. The user's explicit request takes priority.
 
-Generate a thorough, detailed research report with inline citations. Do NOT truncate or summarize - include everything relevant:
+Generate a thorough, detailed research report IN GREEK (Ελληνικά) with inline citations. Do NOT truncate or summarize - include everything relevant:
 """
 
 
@@ -363,7 +365,7 @@ We have the opportunity to refine the existing answer (only if needed) with some
 {context_msg}
 ------------
 
-Given the new context, refine the original answer to better answer the query. If the context isn't useful, return the original answer.
+Given the new context, refine the original answer to better answer the query. Always respond in Greek (Ελληνικά). If the context isn't useful, return the original answer.
 """
 
 

@@ -287,12 +287,12 @@ def get_preset_label(preset: DateFilterPreset) -> str:
         Human-readable label
     """
     labels = {
-        "all_time": "All Time",
-        "last_7_days": "Last 7 Days",
-        "last_30_days": "Last 30 Days",
-        "last_90_days": "Last 90 Days",
-        "this_year": "This Year",
-        "custom": "Custom Range"
+        "all_time": "Όλες οι ημερομηνίες",
+        "last_7_days": "Τελευταίες 7 ημέρες",
+        "last_30_days": "Τελευταίες 30 ημέρες",
+        "last_90_days": "Τελευταίες 90 ημέρες",
+        "this_year": "Φέτος",
+        "custom": "Προσαρμοσμένο εύρος"
     }
     return labels.get(preset, preset)
 
