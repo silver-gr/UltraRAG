@@ -1841,10 +1841,9 @@ class UltraRAG:
             from research_mode import ResearchRetriever, llm_complete_with_retry
             from llama_index.core.retrievers import VectorIndexRetriever
 
-            # Determine if we should use federated retrieval (multiple sources)
+            # Determine if we should use federated retrieval (non-vault sources)
             use_federated = (
                 source_filter is not None
-                and len(source_filter) > 1
                 and any(s != "vault" for s in source_filter)
             )
 
@@ -1881,7 +1880,7 @@ class UltraRAG:
                         custom_retriever=self.saved_items_retriever,
                     ))
 
-                if len(fed_sources) > 1:
+                if len(fed_sources) >= 1:
                     base_retriever = FederatedRetriever(
                         sources=fed_sources,
                         config=self.config,
@@ -1892,7 +1891,7 @@ class UltraRAG:
                     logger.info(f"Research mode: federated retriever with {len(fed_sources)} sources: "
                                 f"{[s.name for s in fed_sources]}")
                 else:
-                    # Only one source actually available, fall back to vault-only
+                    # No matching sources available, fall back to vault-only
                     use_federated = False
 
             if not use_federated:
