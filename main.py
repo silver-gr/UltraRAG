@@ -13,8 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Set
 from llama_index.core import Settings
-from llama_index.llms.google_genai import GoogleGenAI
-from gemini_cli import GeminiCLI
 from tracked_llm import wrap_llm_with_tracking
 from tqdm import tqdm
 
@@ -243,39 +241,25 @@ class UltraRAG:
         print(f"Setting up LLM: {self.config.llm.model} (backend: {backend})")
 
         try:
+            from llm_factory import create_llm_from_config, create_llm_from_env
+
             if backend == "cli":
                 # Use Gemini CLI for separate free tier quota (1000/day)
                 # No token tracking needed - CLI quota is free
-                self.llm = GeminiCLI(
-                    model=self.config.llm.model,
-                    temperature=self.config.llm.temperature,
-                    max_tokens=self.config.llm.max_tokens
-                )
+                self.llm = create_llm_from_config(self.config)
                 logger.info("Using Gemini CLI backend (free tier: 1000 requests/day, no cost tracking)")
             else:
-                # Use Google Gemini API directly
-                google_key = self.config.google_api_key.get_secret_value()
-                if not google_key:
-                    logger.error("Google API key not found")
-                    raise ValueError(
-                        "GOOGLE_API_KEY not found. Please set it in your .env file.\n"
-                        "Get your API key from: https://makersuite.google.com/app/apikey"
-                    )
+                # Native Gemini API or OpenAI-compatible proxy (backend="openai")
+                base_llm = create_llm_from_config(self.config)
 
-                base_llm = GoogleGenAI(
-                    model=self.config.llm.model,
-                    api_key=google_key,
-                    temperature=self.config.llm.temperature,
-                    max_tokens=self.config.llm.max_tokens
-                )
-
-                # Wrap with token tracking and optional fallback chain (only for paid API)
+                # Wrap with token tracking and optional fallback chain
                 self.llm = wrap_llm_with_tracking(
                     base_llm,
                     model_name=self.config.llm.model,
                     fallback_models=self.config.llm.fallback_models or None,
+                    llm_factory=create_llm_from_env,
                 )
-                logger.info(f"LLM token tracking enabled for {self.config.llm.model}")
+                logger.info(f"LLM token tracking enabled for {self.config.llm.model} (backend: {backend})")
 
             Settings.llm = self.llm
             logger.debug("LLM setup completed successfully")

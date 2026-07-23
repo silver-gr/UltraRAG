@@ -199,10 +199,10 @@ class QueryTransformer:
     def _create_hyde_llm(self, temperature: float):
         """Create a separate LLM instance for HyDE with higher temperature."""
         try:
-            import os
-            hyde_llm = GoogleGenAI(
-                model=self.llm.model if hasattr(self.llm, 'model') else "gemini-3-flash-preview",
-                api_key=os.getenv("GOOGLE_API_KEY", ""),
+            from llm_factory import create_llm_from_env
+            model = self.llm.model if hasattr(self.llm, 'model') else "gemini-3-flash-preview"
+            hyde_llm = create_llm_from_env(
+                model=model,
                 temperature=temperature,
                 max_tokens=2048,
             )

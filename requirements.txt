@@ -6,6 +6,7 @@ llama-index-embeddings-openai
 llama-index-vector-stores-lancedb
 llama-index-vector-stores-qdrant
 llama-index-llms-google-genai  # New unified Google GenAI SDK
+llama-index-llms-openai-like<0.6  # OpenAI-compatible proxy backend (LLM_BACKEND=openai); pinned <0.6 to keep llama-index-llms-openai<0.6
 llama-index-graph-stores-neo4j
 llama-index-retrievers-bm25
 llama-index-postprocessor-voyageai-rerank  # VoyageAI reranker
@@ -21,6 +22,9 @@ neo4j>=5.0.0
 # Embeddings
 voyageai
 sentence-transformers
+# torchcodec is a transitive dep of sentence-transformers; pin to the build that
+# matches torch 2.10 (>=0.11 needs torch 2.11 symbol _torch_dtype_float4_e2m1fn_x2)
+torchcodec==0.10.0
 
 # Document Processing
 pymupdf  # PDF processing

@@ -391,21 +391,21 @@ def get_llm(config: RAGConfig):
     """Get configured LLM instance."""
     try:
         from tracked_llm import wrap_llm_with_tracking
+        from llm_factory import create_llm_from_config, create_llm_from_env
 
+        base_llm = create_llm_from_config(config)
         if config.llm.backend == "cli":
-            from gemini_cli import GeminiCLI
-            return GeminiCLI()
-        else:
-            from llama_index.llms.google_genai import GoogleGenAI
-            llm = GoogleGenAI(model=config.llm.model)
-            return wrap_llm_with_tracking(
-                llm,
-                fallback_models=config.llm.fallback_models or None,
-            )
+            return base_llm
+        return wrap_llm_with_tracking(
+            base_llm,
+            model_name=config.llm.model,
+            fallback_models=config.llm.fallback_models or None,
+            llm_factory=create_llm_from_env,
+        )
     except Exception as e:
         logger.warning(f"Failed to get LLM: {e}, using default")
-        from llama_index.llms.google_genai import GoogleGenAI
-        return GoogleGenAI(model=config.llm.model)
+        from llm_factory import create_llm_from_config
+        return create_llm_from_config(config)
 
 
 def _do_research(

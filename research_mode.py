@@ -317,19 +317,12 @@ class ResearchRetriever:
         Uses a faster model with AFC disabled to reduce rate limiting.
         """
         try:
-            import os
-            from llama_index.llms.google_genai import GoogleGenAI
+            from llm_factory import create_llm_from_env
             from tracked_llm import wrap_llm_with_tracking
 
-            api_key = os.getenv("GOOGLE_API_KEY")
-            if not api_key:
-                logger.warning("No GOOGLE_API_KEY found, falling back to main LLM for gap analysis")
-                return self.llm
-
-            # Create lightweight LLM with AFC disabled
-            base_llm = GoogleGenAI(
+            # Create lightweight LLM with AFC disabled; honors LLM_BACKEND/proxy/effort via env.
+            base_llm = create_llm_from_env(
                 model=self.GAP_ANALYSIS_MODEL,
-                api_key=api_key,
                 temperature=0.1,
                 max_tokens=4096,  # Increased: model may provide detailed analysis with large context
                 is_function_calling_model=False,  # Disable AFC

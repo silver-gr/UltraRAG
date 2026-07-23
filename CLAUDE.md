@@ -362,12 +362,15 @@ EXPANSION_LANGUAGES=el  # Comma-separated: el,es,de for Greek, Spanish, German
 
 ## LLM Backend Options
 
-Two LLM backends are available (set `LLM_BACKEND` in .env):
+Three LLM backends are available (set `LLM_BACKEND` in .env):
 
 | Backend | Quota | Requires | Use Case |
 |---------|-------|----------|----------|
 | `api` | API-based | `GOOGLE_API_KEY` | Default, direct API access |
 | `cli` | 1000 req/day, 60/min | Gemini CLI installed | Cost savings, separate quota |
+| `openai` | Depends on proxy | `LLM_BASE_URL` + `LLM_API_KEY` | Reach Gemini via your own OpenAI-compatible proxy (e.g. LiteLLM) |
+
+All backends are constructed through a single factory (`llm_factory.py`), so `LLM_BACKEND`, the proxy endpoint, and thinking effort are honored uniformly across the main LLM, HyDE, gap analysis, and fallbacks.
 
 **CLI Setup:**
 ```bash
@@ -376,6 +379,18 @@ gemini  # authenticate once
 ```
 
 Then set `LLM_BACKEND=cli` in your .env file.
+
+**OpenAI-Compatible Proxy Setup:**
+```bash
+# .env
+LLM_BACKEND=openai
+LLM_BASE_URL=http://localhost:4000/v1   # your gateway's /v1 base URL
+LLM_API_KEY=sk-your-proxy-key           # falls back to GOOGLE_API_KEY if unset
+```
+
+**Thinking / Reasoning Effort** (`LLM_THINKING_EFFORT`): one of `none`, `minimal`, `low`, `medium`, `high` (empty = backend default).
+- `openai` backend: forwarded verbatim as `reasoning_effort` (the proxy applies it).
+- `api` backend: mapped to Gemini `ThinkingConfig` (`none`/`minimal`→budget 0, `low`→level low, `medium`/`high`→level high). Only applied when non-empty.
 
 ## Default Configuration (v1.6.0)
 - LLM: `gemini-3-flash-preview` (backend: `api`, context caching enabled)

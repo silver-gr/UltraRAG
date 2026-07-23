@@ -277,27 +277,15 @@ class TrackedLLM(CustomLLM):
         if self._llm_factory is not None:
             return self._llm_factory(fallback_model)
 
-        # Default: clone inner_llm with different model name
-        # Works for GoogleGenAI and similar LlamaIndex LLMs
-        try:
-            import os
-            from llama_index.llms.google_genai import GoogleGenAI
+        # Default: clone inner_llm with a different model name via the shared factory.
+        # Honors LLM_BACKEND/proxy/effort (GoogleGenAI, OpenAI proxy, or CLI).
+        from llm_factory import create_llm_from_env
 
-            api_key = os.getenv("GOOGLE_API_KEY")
-            if not api_key:
-                raise ValueError("GOOGLE_API_KEY not set for fallback model")
-
-            return GoogleGenAI(
-                model=fallback_model,
-                api_key=api_key,
-                temperature=getattr(self.inner_llm, 'temperature', 0.1),
-                max_tokens=getattr(self.inner_llm, 'max_tokens', 65536),
-            )
-        except ImportError:
-            raise RuntimeError(
-                f"Cannot create fallback LLM for {fallback_model}: "
-                "llama_index.llms.google_genai not available"
-            )
+        return create_llm_from_env(
+            model=fallback_model,
+            temperature=getattr(self.inner_llm, 'temperature', 0.1),
+            max_tokens=getattr(self.inner_llm, 'max_tokens', 65536),
+        )
 
     def _handle_retryable_error(
         self, exc: Exception, current_model: str, is_last: bool
