@@ -200,7 +200,7 @@ class QueryTransformer:
         """Create a separate LLM instance for HyDE with higher temperature."""
         try:
             from llm_factory import create_llm_from_env
-            model = self.llm.model if hasattr(self.llm, 'model') else "gemini-3-flash-preview"
+            model = self.llm.model if hasattr(self.llm, 'model') else "gemini-3.8-flash-high"
             hyde_llm = create_llm_from_env(
                 model=model,
                 temperature=temperature,

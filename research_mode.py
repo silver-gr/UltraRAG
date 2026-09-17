@@ -254,7 +254,7 @@ class ResearchRetriever:
     ITERATION_DELAY = 0
 
     # Model for gap analysis (same as main LLM for consistency)
-    GAP_ANALYSIS_MODEL = "gemini-3-flash-preview"
+    GAP_ANALYSIS_MODEL = "gemini-3.8-flash-high"
 
     def __init__(
         self,
