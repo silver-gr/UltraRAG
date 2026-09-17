@@ -1,0 +1,63 @@
+[project]
+name = "ultrarag"
+version = "1.6.0"
+description = "Production-grade RAG system for Obsidian vaults"
+requires-python = ">=3.13"
+dependencies = [
+    # Core RAG Framework
+    "llama-index>=0.10.0",
+    "llama-index-embeddings-voyageai",
+    "llama-index-embeddings-huggingface",
+    "llama-index-embeddings-openai",
+    "llama-index-vector-stores-lancedb",
+    "llama-index-vector-stores-qdrant",
+    "llama-index-llms-google-genai",
+    "llama-index-llms-openai-like<0.6",
+    "llama-index-graph-stores-neo4j",
+    "llama-index-retrievers-bm25",
+    "llama-index-postprocessor-voyageai-rerank",
+    "llama-index-packs-raptor",
+    # Vector Database
+    "lancedb>=0.20.0",
+    "qdrant-client>=1.7.0",
+    # Graph Database
+    "neo4j>=5.0.0",
+    # Embeddings
+    "voyageai",
+    "sentence-transformers",
+    "torchcodec==0.16.0",
+    # Document Processing
+    "pymupdf",
+    "python-frontmatter",
+    "beautifulsoup4",
+    "lxml",
+    "EbookLib",
+    "html2text",
+    # Web UI
+    "streamlit",
+    # Utilities
+    "python-dotenv",
+    "pydantic>=2.0.0",
+    "pandas",
+    "numpy",
+    "tqdm",
+    # URLs
+    "tavily-python",
+]
+
+[project.optional-dependencies]
+eval = [
+    "ragas>=0.1.0",
+    "datasets>=2.14.0",
+    "langsmith>=0.1.0",
+]
+test = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+dev = [
+    "ultrarag[eval,test]",
+]
+
+[tool.uv]
+package = false

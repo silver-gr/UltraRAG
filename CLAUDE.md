@@ -57,10 +57,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Testing Commands
 
 ```bash
-pytest -m unit              # Fast, no API (run first)
-pytest tests/test_indexing.py -v   # After changing indexing.py
-pytest tests/test_retrieval.py -v  # After changing retrieval.py
-pytest -x --tb=short        # Stop at first failure
+uv run pytest -m unit              # Fast, no API (run first)
+uv run pytest tests/test_indexing.py -v   # After changing indexing.py
+uv run pytest tests/test_retrieval.py -v  # After changing retrieval.py
+uv run pytest -x --tb=short        # Stop at first failure
 ```
 
 ---
@@ -74,33 +74,34 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 ## Development Commands
 
 ```bash
-# Activate environment
-source venv/bin/activate
-
 # Run interactive CLI
-python main.py
+uv run python main.py
 
 # Run non-interactive CLI (for agents/automation)
-python -m cli research --topic "query" --depth quick|standard|deep
-python -m cli query --query "question" --source vault|conversations|all
-python -m cli status
+uv run python -m cli research --topic "query" --depth quick|standard|deep
+uv run python -m cli query --query "question" --source vault|conversations|all
+uv run python -m cli status
 
 # Run web interface
-streamlit run app.py
+uv run streamlit run app.py
 # Opens at https://localhost:9001 (HTTPS via .streamlit/config.toml)
 
 # Run all tests
-pytest
+uv run pytest
 
 # Run specific test file/class/method
-pytest tests/test_loader.py
-pytest tests/test_loader.py::TestWikilinkExtraction
-pytest tests/test_loader.py::TestWikilinkExtraction::test_extract_simple_wikilinks
+uv run pytest tests/test_loader.py
+uv run pytest tests/test_loader.py::TestWikilinkExtraction
+uv run pytest tests/test_loader.py::TestWikilinkExtraction::test_extract_simple_wikilinks
 
 # Coverage report
-pytest --cov=. --cov-report=html && open htmlcov/index.html
+uv run pytest --cov=. --cov-report=html && open htmlcov/index.html
 
-# Check setup
+# Install dependencies
+uv sync
+
+# Install with dev/test/eval extras
+uv sync --extra dev
 ```
 
 ## Web Interface Auto-Load
@@ -637,19 +638,38 @@ Overall average: **60-90% token reduction** on common development operations.
 <!-- /rtk-instructions -->
 
 <!-- gitnexus:start -->
-# GitNexus MCP
+# GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **UltraRAG** (3621 symbols, 6705 relationships, 133 execution flows).
+This project is indexed by GitNexus as **UltraRAG** (3833 symbols, 6767 relationships, 280 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
-## Always Start Here
+> Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
-1. **Read `gitnexus://repo/{name}/context`** — codebase overview + check index freshness
-2. **Match your task to a skill below** and **read that skill file**
-3. **Follow the skill's workflow and checklist**
+## Always Do
 
-> If step 1 warns the index is stale, run `npx gitnexus analyze` in the terminal first.
+- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
+- **MUST run `detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows. For regression review, compare against the default branch: `detect_changes({scope: "compare", base_ref: "main"})`.
+- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
+- When exploring unfamiliar code, use `query({search_query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
+- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `context({name: "symbolName"})`.
+- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
 
-## Skills
+## Never Do
+
+- NEVER edit a function, class, or method without first running `impact` on it.
+- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
+- NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
+- NEVER commit changes without running `detect_changes()` to check affected scope.
+
+## Resources
+
+| Resource | Use for |
+|----------|---------|
+| `gitnexus://repo/UltraRAG/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/UltraRAG/clusters` | All functional areas |
+| `gitnexus://repo/UltraRAG/processes` | All execution flows |
+| `gitnexus://repo/UltraRAG/process/{name}` | Step-by-step execution trace |
+
+## CLI
 
 | Task | Read this skill file |
 |------|---------------------|
