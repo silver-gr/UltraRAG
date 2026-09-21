@@ -372,6 +372,7 @@ Three LLM backends are available (set `LLM_BACKEND` in .env):
 | `openai` | Depends on proxy | `LLM_BASE_URL` + `LLM_API_KEY` | Reach Gemini via your own OpenAI-compatible proxy (e.g. LiteLLM) |
 
 All backends are constructed through a single factory (`llm_factory.py`), so `LLM_BACKEND`, the proxy endpoint, and thinking effort are honored uniformly across the main LLM, HyDE, gap analysis, and fallbacks.
+- The `openai` backend uses a 600-second request timeout so long-running research responses are not cut off by llama_index's shorter client default.
 
 **CLI Setup:**
 ```bash

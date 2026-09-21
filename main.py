@@ -1796,7 +1796,7 @@ class UltraRAG:
         This is 3-5x slower but provides 141% accuracy improvement (based on Khoj benchmarks).
 
         Args:
-            query_str: User query (supports @all prefix for exhaustive search)
+            query_str: User query (supports @all or !all prefix for exhaustive search)
             return_sources: Whether to return source nodes (default: True)
             max_sources: Maximum sources to include in response (None = all)
             date_filter: Date filter preset to apply
@@ -1810,11 +1810,14 @@ class UltraRAG:
         if not self.query_engine:
             raise RuntimeError("Query engine not initialized. Please run index_vault() or load_existing_index() first.")
 
-        # Parse @all prefix for exhaustive search
-        if query_str.startswith("@all "):
-            force_exhaustive = True
-            query_str = query_str[5:].strip()
-            logger.info("Exhaustive mode enabled via @all prefix")
+        # Parse either prefix for exhaustive search.  !all is the frontend-safe alias;
+        # keep @all for backwards compatibility with existing callers.
+        for exhaustive_prefix in ("@all ", "!all "):
+            if query_str.startswith(exhaustive_prefix):
+                force_exhaustive = True
+                query_str = query_str[len(exhaustive_prefix):].strip()
+                logger.info("Exhaustive mode enabled via %s prefix", exhaustive_prefix.rstrip())
+                break
 
         logger.info(f"Research mode query: {query_str[:100]}...")
         if date_filter != "all_time":

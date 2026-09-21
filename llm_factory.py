@@ -43,6 +43,7 @@ VALID_EFFORTS = {"", "none", "minimal", "low", "medium", "high"}
 # Gemini context windows are large; give the OpenAI client a generous window so
 # it does not prematurely truncate context for a non-OpenAI model name.
 _OPENAI_CONTEXT_WINDOW = 1_000_000
+_OPENAI_REQUEST_TIMEOUT = 600
 
 
 def _build_thinking_config(effort: str):
@@ -120,6 +121,7 @@ def create_llm(
             temperature=temperature,
             max_tokens=max_tokens,
             context_window=_OPENAI_CONTEXT_WINDOW,
+            timeout=_OPENAI_REQUEST_TIMEOUT,
             is_chat_model=True,
             is_function_calling_model=is_function_calling_model,
             additional_kwargs=additional_kwargs,

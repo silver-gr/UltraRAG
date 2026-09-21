@@ -19,9 +19,10 @@ For queries that request comprehensive results (e.g., "all habits", "every goal"
 
 **Activation methods:**
 
-1. **Prefix**: Use `@all <query>` to force exhaustive mode
+1. **Prefix**: Use `@all <query>` or `!all <query>` to force exhaustive mode
    ```
    @all all my habits and routines
+   !all all my habits and routines
    ```
 
 2. **Auto-detection**: Patterns like "all", "every", "complete list", "comprehensive" are detected automatically
