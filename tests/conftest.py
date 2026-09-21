@@ -20,6 +20,16 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
+@pytest.fixture(autouse=True)
+def isolate_docstore_cache(tmp_path, monkeypatch):
+    """Index tests must never replace the application's shared docstore cache."""
+    import vector_store
+
+    cache_dir = tmp_path / "docstore_cache"
+    monkeypatch.setattr(vector_store, "CACHE_DIR", cache_dir)
+    monkeypatch.setattr(vector_store, "NODES_CACHE_FILE", cache_dir / "docstore_nodes.pkl")
+
+
 @pytest.fixture
 def temp_vault() -> Generator[Path, None, None]:
     """Create a temporary vault directory for testing."""
