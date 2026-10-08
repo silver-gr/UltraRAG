@@ -200,7 +200,7 @@ class RetrievalConfig(BaseModel):
 
 class LLMConfig(BaseModel):
     """LLM configuration."""
-    model: str = Field(default="gemini-3.8-flash-high")
+    model: str = Field(default="gpt-6.1-sol")
     temperature: float = Field(default=0.1)
     max_tokens: int = Field(default=65536)  # Gemini 3 Flash max output
     enable_thinking_mode: bool = Field(default=True)
@@ -588,7 +588,7 @@ def load_config() -> RAGConfig:
             federated_max_chunks_per_document=int(os.getenv("FEDERATED_MAX_CHUNKS_PER_DOCUMENT", "3"))
         ),
         llm=LLMConfig(
-            model=os.getenv("LLM_MODEL", "gemini-3.8-flash-high"),
+            model=os.getenv("LLM_MODEL", "gpt-6.1-sol"),
             temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
             max_tokens=int(os.getenv("LLM_MAX_TOKENS", "65536")),
             backend=os.getenv("LLM_BACKEND", "api"),  # "api", "cli", or "openai"
