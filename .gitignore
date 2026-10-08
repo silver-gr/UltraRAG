@@ -82,3 +82,6 @@ khoj/
 # Temp audit/report files
 bug_report.json
 refactor_audit.json
+
+# Serena MCP local state (tool removed; never commit)
+.serena/
