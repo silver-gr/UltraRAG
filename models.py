@@ -42,7 +42,7 @@ class EmbeddingQuotaError(UltraRAGError):
         super().__init__(
             message=f"Voyage quota exceeded: {used:,}/{limit:,} tokens",
             fix_hint="Wait for monthly reset or use cached embeddings (re-run won't re-embed)",
-            related_file="data/voyage_usage.json"
+            related_file="~/Projects/shared-data/usage/voyage_usage.json"
         )
 
 

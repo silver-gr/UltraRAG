@@ -333,8 +333,11 @@ Code defaults (your `.env` may override them):
 **Cost tracking:**
 - `llm_token_tracker.py` aggregates LLM calls per day in `data/llm_usage.json`; the API is
   `get_llm_tracker().get_total_stats()`.
-- `token_tracker.py` tracks Voyage usage against the free-tier limits in
-  `data/voyage_usage.json`.
+- `token_tracker.py` tracks Voyage usage per model against the free-tier limits.
+  - It writes to `~/Projects/shared-data/usage/voyage_usage.json`, which is shared with
+    other projects; `data/voyage_usage.json` is a stale leftover.
+  - Switching models archives the old model's counts.
+  - The figures are approximate; the Voyage dashboard is authoritative.
 - Only Gemini models have prices. Any other model, including the default `gpt-6.1-sol`, is
   costed at the `default` entry ($0.50 in / $3.00 out per 1M tokens), so UI costs are
   estimates.
@@ -350,7 +353,7 @@ Code defaults (your `.env` may override them):
 | `index_checkpoint.json` | indexing checkpoint (`main.UltraRAG` only) |
 | `auth/users.json` | user accounts |
 | `users/<username>/` | per-user query history and research exports |
-| `llm_usage.json`, `voyage_usage.json` | usage and cost tracking |
+| `llm_usage.json` | LLM usage and cost tracking (Voyage usage lives outside the repo, see section 7) |
 | `book_metadata_cache.json` | Calibre/web book metadata |
 | `embedding_cache/` | unused (see `cache.py`) |
 
@@ -409,7 +412,7 @@ All are defined in `models.py` and subclass `UltraRAGError`.
 |---|---|---|
 | `IndexNotFoundError` | index not built | Build it (web admin panel, `main.py` startup prompt, or `indexing.index_vault(config)`); check `OBSIDIAN_VAULT_PATH` |
 | `LLMRateLimitError` | 429 from the LLM | Wait, or set `LLM_FALLBACK_MODELS` |
-| `EmbeddingQuotaError` | Voyage quota | Check `data/voyage_usage.json`. Defined, but not currently raised |
+| `EmbeddingQuotaError` | Voyage quota | Check the Voyage dashboard. Defined, but not currently raised |
 | `ConfigurationError` | missing or invalid path/key | The message names the env var |
 | `voyageai.error.AuthenticationError` | invalid `VOYAGE_API_KEY` | Rotate the key |
 

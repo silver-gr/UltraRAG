@@ -57,6 +57,7 @@ class VoyageTokenTracker:
     embedding_usage: TokenUsage = field(default=None)
     rerank_usage: TokenUsage = field(default=None)
     embedding_history: list = field(default_factory=list)
+    rerank_history: list = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def __post_init__(self):
@@ -95,8 +96,9 @@ class VoyageTokenTracker:
                     last_updated=data.get('rerank', {}).get('last_updated', '')
                 )
 
-                # Load embedding history
+                # Load model histories
                 self.embedding_history = data.get('embedding_history', [])
+                self.rerank_history = data.get('rerank_history', [])
 
                 logger.info(
                     f"Loaded Voyage usage: Embeddings {self.embedding_usage.tokens_used:,}/{self.embedding_limit:,} "
@@ -121,6 +123,7 @@ class VoyageTokenTracker:
             token_limit=self.rerank_limit
         )
         self.embedding_history = []
+        self.rerank_history = []
         logger.info("Initialized fresh Voyage token tracking")
 
     def _save_usage(self) -> None:
@@ -129,6 +132,7 @@ class VoyageTokenTracker:
             'embedding': asdict(self.embedding_usage),
             'rerank': asdict(self.rerank_usage),
             'embedding_history': self.embedding_history,
+            'rerank_history': self.rerank_history,
             'saved_at': datetime.now().isoformat()
         }
 
@@ -265,14 +269,40 @@ class VoyageTokenTracker:
                 f"{self.embedding_usage.requests_count} requests"
             )
 
+    def _archive_rerank_model(self) -> None:
+        """Archive current rerank model usage to history."""
+        if self.rerank_usage.tokens_used > 0:
+            self.rerank_history.append({
+                'model': self.rerank_usage.model,
+                'tokens_used': self.rerank_usage.tokens_used,
+                'requests_count': self.rerank_usage.requests_count,
+                'last_updated': self.rerank_usage.last_updated,
+                'archived_at': datetime.now().isoformat()
+            })
+            logger.info(
+                f"Archived {self.rerank_usage.model}: "
+                f"{self.rerank_usage.tokens_used:,} tokens, {self.rerank_usage.requests_count} requests"
+            )
+
     def record_rerank_usage(self, tokens: int, model: str = None) -> None:
-        """Record rerank token usage."""
+        """Record rerank token usage.
+
+        Args:
+            tokens: Number of tokens used
+            model: Model name (if changed, archives old model to history)
+        """
         with self._lock:
+            # If model changed, archive the old model's usage to history
+            if model and model != self.rerank_usage.model:
+                self._archive_rerank_model()
+                self.rerank_usage.model = model
+                self.rerank_usage.tokens_used = 0
+                self.rerank_usage.requests_count = 0
+                logger.info(f"Switched rerank model to {model}, previous model archived to history")
+
             self.rerank_usage.tokens_used += tokens
             self.rerank_usage.requests_count += 1
             self.rerank_usage.last_updated = datetime.now().isoformat()
-            if model:
-                self.rerank_usage.model = model
             self._save_usage()
 
             logger.debug(
