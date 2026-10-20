@@ -13,6 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Removed
+- **Gemini CLI LLM backend** (`LLM_BACKEND=cli`, `gemini_cli.py`). Use `LLM_BACKEND=openai`
+  with an OpenAI-compatible gateway (e.g. LiteLLM) instead. A leftover `LLM_BACKEND=cli`
+  now fails config validation with the list of valid backends.
+
+---
+
 ## [1.6.1] - 2026-03-19
 
 ### Added

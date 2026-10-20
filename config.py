@@ -204,7 +204,7 @@ class LLMConfig(BaseModel):
     temperature: float = Field(default=0.1)
     max_tokens: int = Field(default=65536)  # Gemini 3 Flash max output
     enable_thinking_mode: bool = Field(default=True)
-    backend: str = Field(default="api")  # "api", "cli", or "openai" (OpenAI-compatible proxy)
+    backend: str = Field(default="api")  # "api" or "openai" (OpenAI-compatible proxy)
     base_url: str = Field(default="")  # OpenAI-compatible endpoint for backend="openai" (e.g. http://localhost:4000/v1)
     api_key: SecretStr = Field(default=SecretStr(""))  # Proxy key for backend="openai"; falls back to GOOGLE_API_KEY
     thinking_effort: str = Field(default="")  # "", none, minimal, low, medium, high (reasoning/thinking effort)
@@ -214,12 +214,11 @@ class LLMConfig(BaseModel):
     @classmethod
     def validate_backend(cls, v: str) -> str:
         """Validate LLM backend choice."""
-        valid_backends = ["api", "cli", "openai"]
+        valid_backends = ["api", "openai"]
         if v.lower() not in valid_backends:
             raise ValueError(
                 f"backend must be one of {valid_backends}, got '{v}'. "
                 f"'api' uses Google Gemini API directly. "
-                f"'cli' uses Gemini CLI with separate free tier quota (1000/day). "
                 f"'openai' uses an OpenAI-compatible proxy (set base_url + api_key)."
             )
         return v.lower()
@@ -591,7 +590,7 @@ def load_config() -> RAGConfig:
             model=os.getenv("LLM_MODEL", "gpt-6.1-sol"),
             temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
             max_tokens=int(os.getenv("LLM_MAX_TOKENS", "65536")),
-            backend=os.getenv("LLM_BACKEND", "api"),  # "api", "cli", or "openai"
+            backend=os.getenv("LLM_BACKEND", "api"),  # "api" or "openai"
             base_url=os.getenv("LLM_BASE_URL", ""),
             api_key=SecretStr(os.getenv("LLM_API_KEY", "")),
             thinking_effort=os.getenv("LLM_THINKING_EFFORT", ""),

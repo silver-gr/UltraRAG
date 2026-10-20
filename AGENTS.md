@@ -18,7 +18,7 @@ search. Retrieval is hybrid (vector + BM25), reranked, optionally query-transfor
 self-correcting, with an iterative research mode and RAPTOR summary trees.
 
 - Stack: Python >= 3.13 managed with uv; llama_index; LanceDB (Qdrant optional); Voyage AI
-  embeddings and reranker; LLM via Gemini API, Gemini CLI, or an OpenAI-compatible proxy.
+  embeddings and reranker; LLM via the Gemini API or an OpenAI-compatible proxy.
 - Interfaces: Streamlit web app (multi-user auth, Greek UI), interactive CLI, and a
   non-interactive YAML/JSON CLI for agents.
 - Version: CHANGELOG.md's latest entry is 1.6.1; `pyproject.toml` still says 1.6.0.
@@ -121,7 +121,7 @@ stacks - check and test both.
   - the main LLM, in `main.py` and in `retrieval.get_llm`; these two sites also add the
     `LLM_FALLBACK_MODELS` chain
   - the research gap-analysis LLM (built with function calling disabled)
-- HyDE's LLM and the whole `cli` backend are not tracked.
+- HyDE's LLM is not tracked.
 
 ## 4. Module map
 
@@ -139,7 +139,7 @@ stacks - check and test both.
 - Ingestion: `loader.py`, `chunking.py`, `embeddings.py`, `vector_store.py`.
 - Query: `query_engine.py`, `query_transform.py`, `self_correction.py`.
 - Orchestration: `federated_query.py`, `research_mode.py`, `context_cache.py`, `raptor_index.py`.
-- LLMs: `llm_factory.py`, `gemini_cli.py` (Gemini CLI as an LLM), `tracked_llm.py`.
+- LLMs: `llm_factory.py`, `tracked_llm.py`.
 
 **Sources and features**
 - `conversation_loader.py`: ChatGPT/Claude/Gemini exports, turn-aware chunking.
@@ -280,7 +280,7 @@ Code defaults (your `.env` may override them):
 | Area | Env var(s) | Default |
 |---|---|---|
 | LLM | `LLM_MODEL` | `gpt-6.1-sol` |
-| | `LLM_BACKEND` | `api` (`api`, `cli`, `openai`) |
+| | `LLM_BACKEND` | `api` (`api`, `openai`) |
 | | `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` | 0.1, 65536 |
 | | `LLM_THINKING_EFFORT` | empty = backend default (`none`, `minimal`, `low`, `medium`, `high`) |
 | | `LLM_FALLBACK_MODELS` | empty (comma-separated) |
@@ -325,9 +325,6 @@ Code defaults (your `.env` may override them):
 - `api`: Google GenAI with `GOOGLE_API_KEY`. `LLM_THINKING_EFFORT` maps to the Gemini
   thinking config: `none`/`minimal` -> budget 0, `low` -> level low, `medium`/`high` ->
   level high.
-- `cli`: Gemini CLI (`npm install -g @google/gemini-cli`, run `gemini` once to log in;
-  1000 req/day, 60/min).
-  - Ignores proxy and thinking settings, and is not token-tracked.
 - `openai`: an OpenAI-compatible proxy (e.g. LiteLLM). Configure it with `LLM_BASE_URL`
   (the `/v1` base) and `LLM_API_KEY`, which falls back to `GOOGLE_API_KEY`.
   - `LLM_THINKING_EFFORT` is forwarded as `reasoning_effort`.
@@ -411,7 +408,7 @@ All are defined in `models.py` and subclass `UltraRAGError`.
 | Error | Likely cause | Fix |
 |---|---|---|
 | `IndexNotFoundError` | index not built | Build it (web admin panel, `main.py` startup prompt, or `indexing.index_vault(config)`); check `OBSIDIAN_VAULT_PATH` |
-| `LLMRateLimitError` | 429 from the LLM | Wait, or switch `LLM_BACKEND` (e.g. `cli`) |
+| `LLMRateLimitError` | 429 from the LLM | Wait, or set `LLM_FALLBACK_MODELS` |
 | `EmbeddingQuotaError` | Voyage quota | Check `data/voyage_usage.json`. Defined, but not currently raised |
 | `ConfigurationError` | missing or invalid path/key | The message names the env var |
 | `voyageai.error.AuthenticationError` | invalid `VOYAGE_API_KEY` | Rotate the key |
@@ -470,7 +467,7 @@ Fix these when you touch the area, and do not copy them elsewhere:
   - HyDE in `query_transform.py` follows the main LLM's model, falling back to the
     literal `gpt-6.1-sol` only when that LLM has no `model` attribute.
 - **`context_cache.py`:** Gemini-only (needs `GOOGLE_API_KEY`). Errors are swallowed at
-  debug level, and it is not wired to the `openai` or `cli` backends.
+  debug level, and it is not wired to the `openai` backend.
 - **`IndexNotFoundError` hint:** it says `VAULT_PATH`; the variable is `OBSIDIAN_VAULT_PATH`.
 - **Duplicate types:** `models.py` duplicates `IndexProfile`, `ConvergenceConfig` and
   `IndexSource`. The live definitions are in `research_mode.py` and `federated_query.py`.

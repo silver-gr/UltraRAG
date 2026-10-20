@@ -243,23 +243,17 @@ class UltraRAG:
         try:
             from llm_factory import create_llm_from_config, create_llm_from_env
 
-            if backend == "cli":
-                # Use Gemini CLI for separate free tier quota (1000/day)
-                # No token tracking needed - CLI quota is free
-                self.llm = create_llm_from_config(self.config)
-                logger.info("Using Gemini CLI backend (free tier: 1000 requests/day, no cost tracking)")
-            else:
-                # Native Gemini API or OpenAI-compatible proxy (backend="openai")
-                base_llm = create_llm_from_config(self.config)
+            # Native Gemini API or OpenAI-compatible proxy (backend="openai")
+            base_llm = create_llm_from_config(self.config)
 
-                # Wrap with token tracking and optional fallback chain
-                self.llm = wrap_llm_with_tracking(
-                    base_llm,
-                    model_name=self.config.llm.model,
-                    fallback_models=self.config.llm.fallback_models or None,
-                    llm_factory=create_llm_from_env,
-                )
-                logger.info(f"LLM token tracking enabled for {self.config.llm.model} (backend: {backend})")
+            # Wrap with token tracking and optional fallback chain
+            self.llm = wrap_llm_with_tracking(
+                base_llm,
+                model_name=self.config.llm.model,
+                fallback_models=self.config.llm.fallback_models or None,
+                llm_factory=create_llm_from_env,
+            )
+            logger.info(f"LLM token tracking enabled for {self.config.llm.model} (backend: {backend})")
 
             Settings.llm = self.llm
             logger.debug("LLM setup completed successfully")
@@ -1996,32 +1990,8 @@ class UltraRAG:
                     else:
                         raise
 
-            elif self.config.llm.backend == "cli":
-                # === CLI FALLBACK ===
-                # CLI has 120s hard timeout, too short for multi-chunk
-                logger.warning("Chunked synthesis not supported with CLI backend, using progressive retry")
-                for pct in [0.66, 0.50, 0.33]:
-                    limit = max(HARD_FLOOR, int(available_nodes * pct))
-                    subset = nodes_for_retry[:limit]
-                    research_prompt = _build_chunk_prompt(subset, query_str)
-                    try:
-                        response = llm_complete_with_retry(Settings.llm, research_prompt, max_retries=2)
-                        combined_answer = response.text
-                        nodes_for_synthesis = subset
-                        logger.info(f"CLI progressive retry succeeded with {len(subset)} nodes")
-                        break
-                    except Exception:
-                        continue
-                if combined_answer is None:
-                    # Last resort: hard floor
-                    subset = nodes_for_retry[:HARD_FLOOR]
-                    research_prompt = _build_chunk_prompt(subset, query_str)
-                    response = llm_complete_with_retry(Settings.llm, research_prompt, max_retries=2)
-                    combined_answer = response.text
-                    nodes_for_synthesis = subset
-
             else:
-                # === CHUNKED SYNTHESIS PATH (API backend only) ===
+                # === CHUNKED SYNTHESIS PATH ===
                 CHUNK_BUDGET = int(TOKEN_QUOTA * 0.8)  # 800K per chunk
                 nodes_per_chunk = max(50, int(CHUNK_BUDGET / est_tokens_per_node))
                 chunks = [nodes_for_retry[i:i + nodes_per_chunk]

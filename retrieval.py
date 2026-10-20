@@ -394,8 +394,6 @@ def get_llm(config: RAGConfig):
         from llm_factory import create_llm_from_config, create_llm_from_env
 
         base_llm = create_llm_from_config(config)
-        if config.llm.backend == "cli":
-            return base_llm
         return wrap_llm_with_tracking(
             base_llm,
             model_name=config.llm.model,

@@ -7,8 +7,7 @@ thinking/reasoning effort setting.
 Backends
 --------
 - ``api``    : Google Gemini native (llama_index ``GoogleGenAI``).
-- ``cli``    : Gemini CLI (separate free-tier quota, no proxy/effort support).
-- ``openai`` : OpenAI-compatible proxy (llama_index ``OpenAILike`` pointed at
+- ``openai`` :OpenAI-compatible proxy (llama_index ``OpenAILike`` pointed at
                ``LLM_BASE_URL``). Use this to reach Gemini through your own
                OpenAI-style gateway (e.g. LiteLLM). ``OpenAILike`` accepts
                arbitrary (non-OpenAI) model names.
@@ -87,11 +86,6 @@ def create_llm(
     required credential/endpoint is missing.
     """
     backend = (backend or "api").lower()
-
-    if backend == "cli":
-        from gemini_cli import GeminiCLI
-
-        return GeminiCLI(model=model, temperature=temperature, max_tokens=max_tokens)
 
     if backend == "openai":
         # OpenAILike (not OpenAI) so non-OpenAI model names (e.g. gemini-*) are

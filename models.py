@@ -49,7 +49,7 @@ class EmbeddingQuotaError(UltraRAGError):
 class LLMRateLimitError(UltraRAGError):
     """Gemini rate limit hit."""
     def __init__(self, retry_after: int | None = None):
-        hint = f"Retry after {retry_after}s" if retry_after else "Set LLM_BACKEND=cli in .env for separate quota"
+        hint = f"Retry after {retry_after}s" if retry_after else "Wait for the quota to reset, or set LLM_FALLBACK_MODELS in .env"
         super().__init__(
             message="Gemini API rate limit exceeded (429)",
             fix_hint=hint,
