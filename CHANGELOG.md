@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stay valid: queries and newly indexed documents use `voyage-4-large`, no re-index needed.
 - **Default reranker `rerank-3`** (was `rerank-2.5`): same API, price and score calibration.
 
+### Fixed
+- **Agent CLI returned "Empty Response"** (`python -m cli query/research`, broken since
+  1.6.0). The stateless `retrieval.py` engines were built without a reranker or BM25 nodes,
+  so the 0.3 cosine cutoff ran on rank-fused scores and removed every result. They now get
+  the configured reranker and the docstore nodes, like the web app.
+- Voyage usage tracker: switching rerank models now archives the old model's counts
+  instead of booking them to the new model.
+
 ### Removed
 - **Gemini CLI LLM backend** (`LLM_BACKEND=cli`, `gemini_cli.py`). Use `LLM_BACKEND=openai`
   with an OpenAI-compatible gateway (e.g. LiteLLM) instead. A leftover `LLM_BACKEND=cli`

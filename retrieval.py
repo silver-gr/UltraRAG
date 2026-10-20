@@ -263,7 +263,7 @@ def federated_query(
             source_type=src.source_type.value,
             index=src.index,
             weight=src.weight,
-            nodes=src.nodes,
+            nodes=src.nodes or _docstore_nodes(src.index),
             wikilink_graph=src.wikilink_graph,
         ))
 
@@ -272,8 +272,8 @@ def federated_query(
 
     t0 = time.time()
     engine = FederatedQueryEngine(
-        sources=fed_sources, config=config, book_filter=book_filter,
-        metadata_filter=metadata_filter,
+        sources=fed_sources, config=config, reranker=_get_reranker(config),
+        book_filter=book_filter, metadata_filter=metadata_filter,
     )
     timings["engine_build_ms"] = round((time.time() - t0) * 1000, 1)
 
@@ -360,10 +360,34 @@ def _build_query_engine(index: VectorStoreIndex, config: RAGConfig, mode: str, m
     """
     from query_engine import RAGQueryEngine, HybridQueryEngine
 
+    reranker = _get_reranker(config)
     if mode == "simple":
-        return RAGQueryEngine(index, config, metadata_filter=metadata_filter)
+        return RAGQueryEngine(index, config, reranker=reranker, metadata_filter=metadata_filter)
     else:
-        return HybridQueryEngine(index, config, metadata_filter=metadata_filter)
+        return HybridQueryEngine(
+            index, config, reranker=reranker, nodes=_docstore_nodes(index),
+            metadata_filter=metadata_filter,
+        )
+
+
+def _get_reranker(config: RAGConfig):
+    """Build the configured reranker, as main.UltraRAG does.
+
+    Without it the engines fall back to a cosine similarity cutoff that also runs
+    on rank-fused scores, which filters out every result.
+    """
+    from embeddings import get_reranker
+
+    return get_reranker(
+        model_name=config.retrieval.reranker_model,
+        api_key=config.voyage_api_key,
+        top_n=config.retrieval.rerank_top_n,
+    )
+
+
+def _docstore_nodes(index: VectorStoreIndex) -> list | None:
+    """Nodes for BM25; load_index() reconstructs them into the docstore."""
+    return list(index.docstore.docs.values()) or None
 
 
 def _compute_confidence(source_nodes) -> float | None:
@@ -426,7 +450,7 @@ def _do_research(
                 source_type=src.source_type.value,
                 index=src.index,
                 weight=src.weight,
-                nodes=src.nodes,
+                nodes=src.nodes or _docstore_nodes(src.index),
                 wikilink_graph=src.wikilink_graph,
             ))
 
@@ -434,6 +458,7 @@ def _do_research(
         base_retriever = FederatedRetriever(
             sources=sources_list,
             config=config,
+            reranker=_get_reranker(config),
         )
 
         llm = get_llm(config)

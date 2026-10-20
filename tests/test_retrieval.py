@@ -186,3 +186,72 @@ class TestResearch:
 
         with pytest.raises(IndexNotFoundError):
             research("test", None)
+
+
+class TestEngineWiring:
+    """
+    The stateless API must wire the reranker and BM25 nodes like main.UltraRAG.
+
+    Without a reranker the engines apply a cosine similarity cutoff to rank-fused
+    scores, which removed every result ("Empty Response" from the agent CLI).
+    """
+
+    @pytest.mark.unit
+    def test_query_engines_get_reranker_and_docstore_nodes(self, test_config):
+        from retrieval import _build_query_engine
+
+        index = MagicMock()
+        index.docstore.docs = {"a": "node-a", "b": "node-b"}
+        reranker = object()
+
+        with patch('embeddings.get_reranker', return_value=reranker), \
+             patch('query_engine.HybridQueryEngine') as hybrid, \
+             patch('query_engine.RAGQueryEngine') as simple:
+            _build_query_engine(index, test_config, "hybrid")
+            _build_query_engine(index, test_config, "simple")
+
+        assert hybrid.call_args.kwargs["reranker"] is reranker
+        assert hybrid.call_args.kwargs["nodes"] == ["node-a", "node-b"]
+        assert simple.call_args.kwargs["reranker"] is reranker
+
+    @pytest.mark.unit
+    def test_federated_query_gets_reranker_and_docstore_nodes(self, test_config):
+        from models import IndexSource, SourceType
+        from retrieval import federated_query
+
+        index = MagicMock()
+        index.docstore.docs = {"a": "node-a"}
+        reranker = object()
+        sources = {"vault": IndexSource(name="vault", index=index, source_type=SourceType.VAULT)}
+
+        with patch('embeddings.get_reranker', return_value=reranker), \
+             patch('federated_query.FederatedQueryEngine') as engine:
+            engine.return_value.query.return_value = MagicMock(
+                response="answer", source_nodes=[], metadata={}
+            )
+            federated_query("wiring test", sources, test_config)
+
+        kwargs = engine.call_args.kwargs
+        assert kwargs["reranker"] is reranker
+        assert kwargs["sources"][0].nodes == ["node-a"]
+
+    @pytest.mark.unit
+    def test_research_retriever_gets_reranker_and_docstore_nodes(self, test_config):
+        from models import IndexSource, SourceType
+        from retrieval import _do_research
+
+        index = MagicMock()
+        index.docstore.docs = {"a": "node-a"}
+        reranker = object()
+        sources = {"vault": IndexSource(name="vault", index=index, source_type=SourceType.VAULT)}
+
+        with patch('embeddings.get_reranker', return_value=reranker), \
+             patch('retrieval.get_llm'), \
+             patch('federated_query.FederatedRetriever') as retriever, \
+             patch('research_mode.ResearchRetriever') as research_retriever:
+            research_retriever.return_value.research.side_effect = RuntimeError("stop after wiring")
+            _do_research("wiring test", sources, test_config, False)
+
+        kwargs = retriever.call_args.kwargs
+        assert kwargs["reranker"] is reranker
+        assert kwargs["sources"][0].nodes == ["node-a"]
