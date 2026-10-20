@@ -28,23 +28,20 @@ class TestFullWorkflow:
             index = index_vault(test_config)
             assert index is not None, "index_vault() should return an index"
 
-            # Query (simple mode to avoid LLM dependency)
-            with patch('retrieval.get_llm') as mock_llm:
-                mock_response = type('Response', (), {
-                    'response': 'RAG combines retrieval with generation.',
-                    'source_nodes': [],
-                    'metadata': {}
-                })()
-                mock_llm.return_value.complete.return_value = mock_response
+            # Query (engine mocked to avoid LLM/reranker dependency)
+            mock_response = type('Response', (), {
+                'response': 'RAG combines retrieval with generation.',
+                'source_nodes': [],
+                'metadata': {}
+            })()
 
-                # Mock the query engine
-                with patch.object(index, 'as_query_engine') as mock_engine:
-                    mock_engine.return_value.query.return_value = mock_response
+            with patch('retrieval._build_query_engine') as mock_engine:
+                mock_engine.return_value.query.return_value = mock_response
 
-                    result = query("What is RAG?", index, test_config, mode="simple")
+                result = query("What is RAG?", index, test_config, mode="simple")
 
-                    assert isinstance(result, QueryResult)
-                    assert len(result.answer) > 0
+                assert isinstance(result, QueryResult)
+                assert len(result.answer) > 0
 
     def test_load_and_query(self, test_config, mock_embedding_model):
         """
@@ -65,19 +62,18 @@ class TestFullWorkflow:
             assert loaded is not None, "load_index() should return the index"
 
             # Then query
-            with patch('retrieval.get_llm') as mock_llm:
-                mock_response = type('Response', (), {
-                    'response': 'Test response',
-                    'source_nodes': [],
-                    'metadata': {}
-                })()
+            mock_response = type('Response', (), {
+                'response': 'Test response',
+                'source_nodes': [],
+                'metadata': {}
+            })()
 
-                with patch.object(loaded, 'as_query_engine') as mock_engine:
-                    mock_engine.return_value.query.return_value = mock_response
+            with patch('retrieval._build_query_engine') as mock_engine:
+                mock_engine.return_value.query.return_value = mock_response
 
-                    result = query("test", loaded, test_config, mode="simple")
+                result = query("test", loaded, test_config, mode="simple")
 
-                    assert isinstance(result, QueryResult)
+                assert isinstance(result, QueryResult)
 
     def test_index_exists_workflow(self, test_config, mock_embedding_model):
         """
@@ -102,7 +98,7 @@ class TestFullWorkflow:
 class TestModelsIntegration:
     """Test that models.py types work with other modules."""
 
-    def test_query_result_from_retrieval(self, mock_llm):
+    def test_query_result_from_retrieval(self, test_config):
         """
         GIVEN: A mock index
         WHEN: retrieval.query() is called
@@ -112,15 +108,15 @@ class TestModelsIntegration:
         from models import QueryResult, IndexNotFoundError
         from unittest.mock import MagicMock
 
-        with patch('retrieval.get_llm', return_value=mock_llm):
+        with patch('retrieval._build_query_engine') as mock_engine:
             mock_index = MagicMock()
             mock_response = MagicMock()
             mock_response.response = "Test answer"
             mock_response.source_nodes = []
             mock_response.metadata = {}
-            mock_index.as_query_engine.return_value.query.return_value = mock_response
+            mock_engine.return_value.query.return_value = mock_response
 
-            result = query("test", mock_index, mode="simple")
+            result = query("test", mock_index, test_config, mode="simple")
 
             # Verify it's the correct type from models.py
             assert isinstance(result, QueryResult)

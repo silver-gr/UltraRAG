@@ -119,7 +119,7 @@ class TestLLMConfig:
     def test_default_llm_config(self):
         """Test default LLM configuration values."""
         config = LLMConfig()
-        assert config.model == "gemini-3-flash-preview"
+        assert config.model == "gpt-6.1-sol"
         assert config.temperature == 0.1
         assert config.max_tokens == 65536  # Gemini 3 Flash max output
         assert config.enable_thinking_mode is True
