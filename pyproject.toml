@@ -51,12 +51,11 @@ eval = [
     "datasets>=2.14.0",
     "langsmith>=0.1.0",
 ]
-test = [
+
+[dependency-groups]
+dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
-]
-dev = [
-    "ultrarag[eval,test]",
 ]
 
 [tool.uv]
