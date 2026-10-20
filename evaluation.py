@@ -284,7 +284,7 @@ class EvaluationReport:
 class RAGEvaluator:
     """Automated evaluation using RAGAS metrics.
 
-    Requires: pip install ragas datasets pandas
+    Requires: uv sync --extra eval
 
     - Faithfulness: Is the answer grounded in retrieved context?
     - Answer Relevancy: Does the answer address the question?
@@ -404,7 +404,7 @@ class RAGEvaluator:
         # Run RAGAS evaluation
         print("\nRunning RAGAS evaluation (this may take a few minutes)...")
         if not RAGAS_AVAILABLE:
-            raise RuntimeError("RAGAS not installed. Install with: pip install ragas datasets pandas")
+            raise RuntimeError("RAGAS not installed. Install with: uv sync --extra eval")
         try:
             evaluation_result = ragas_evaluate(
                 dataset=ragas_dataset,

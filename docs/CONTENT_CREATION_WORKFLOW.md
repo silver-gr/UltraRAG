@@ -34,7 +34,7 @@ Search your own knowledge base first. You've accumulated 45M words — use them 
 
 ```bash
 # Deep research mode — iterates until confidence threshold
-python -m cli research --topic "[refined topic]" --depth deep
+uv run python -m cli research --topic "[refined topic]" --depth deep
 
 # Or via web UI: enable Research Mode checkbox
 ```

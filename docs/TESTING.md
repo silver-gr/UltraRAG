@@ -4,16 +4,16 @@
 
 ```bash
 # From repo root
-cd /Users/silver/Projects/UltraRAG
+cd UltraRAG
 
 # All tests (unit + integration)
-python -m pytest
+uv run pytest
 
 # Unit-only (no external API calls expected)
-python -m pytest -m unit
+uv run pytest -m unit
 
 # Integration-only (may require real API keys / external resources)
-python -m pytest -m integration
+uv run pytest -m integration
 ```
 
 ## Marker Policy
@@ -49,16 +49,16 @@ New hardening tests:
 
 ```bash
 # Stop on first failure
-python -m pytest -x
+uv run pytest -x
 
 # Verbose traceback
-python -m pytest --tb=long
+uv run pytest --tb=long
 
 # Coverage report
-python -m pytest --cov=. --cov-report=term-missing --cov-report=html
+uv run pytest --cov-report=term-missing
 ```
 
 ## Notes
 
-- Run `python -m pytest -m unit` before opening PRs.
+- Run `uv run pytest -m unit` before opening PRs.
 - Integration tests should be run when touching indexing/retrieval pipelines or external service integrations.

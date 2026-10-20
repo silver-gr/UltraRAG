@@ -23,14 +23,14 @@ try:
     BM25_AVAILABLE = True
 except ImportError:
     BM25_AVAILABLE = False
-    logger.warning("BM25Retriever not available. Install with: pip install llama-index-retrievers-bm25")
+    logger.warning("BM25Retriever not available. Install with: uv sync")
 
 try:
     import Stemmer as PyStemmer
     PYSTEMMER_AVAILABLE = True
 except ImportError:
     PYSTEMMER_AVAILABLE = False
-    logger.warning("PyStemmer not available. Install with: pip install PyStemmer")
+    logger.warning("PyStemmer not available. Install with: uv sync")
 
 
 class BilingualStemmer:

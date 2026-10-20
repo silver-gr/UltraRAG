@@ -248,7 +248,7 @@ def get_embedding_model(
         logger.error(f"Failed to import required embedding library: {e}")
         raise ImportError(
             f"Missing required library for {model_name}. "
-            f"Install it with: pip install llama-index-embeddings-{model_name.split('-')[0]}"
+            f"Install it with: uv add llama-index-embeddings-{model_name.split('-')[0]}"
         ) from e
     except Exception as e:
         logger.error(f"Failed to initialize embedding model {config.model}: {e}", exc_info=True)
@@ -281,7 +281,7 @@ def get_reranker(
                 from llama_index.postprocessor.voyageai_rerank import VoyageAIRerank
             except ImportError:
                 # Fallback to similarity-based reranking
-                logger.warning("VoyageAI reranker not available. Install with: pip install llama-index-postprocessor-voyageai-rerank")
+                logger.warning("VoyageAI reranker not available. Install with: uv sync")
                 from llama_index.core.postprocessor import SimilarityPostprocessor
                 logger.info("Falling back to similarity-based reranking")
                 return SimilarityPostprocessor(similarity_cutoff=0.7)
@@ -311,7 +311,7 @@ def get_reranker(
             try:
                 from llama_index.postprocessor.jinaai_rerank import JinaRerank
             except ImportError:
-                logger.warning("Jina reranker not available. Install with: pip install llama-index-postprocessor-jinaai-rerank")
+                logger.warning("Jina reranker not available. Install with: uv add llama-index-postprocessor-jinaai-rerank")
                 from llama_index.core.postprocessor import SimilarityPostprocessor
                 return SimilarityPostprocessor(similarity_cutoff=0.7)
 
@@ -324,7 +324,7 @@ def get_reranker(
             try:
                 from llama_index.postprocessor.cohere_rerank import CohereRerank
             except ImportError:
-                logger.warning("Cohere reranker not available. Install with: pip install llama-index-postprocessor-cohere-rerank")
+                logger.warning("Cohere reranker not available. Install with: uv add llama-index-postprocessor-cohere-rerank")
                 from llama_index.core.postprocessor import SimilarityPostprocessor
                 return SimilarityPostprocessor(similarity_cutoff=0.7)
 

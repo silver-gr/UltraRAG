@@ -170,11 +170,11 @@ class RaptorIndexManager:
         except ImportError:
             logger.error(
                 "llama-index-packs-raptor not installed. "
-                "Install with: pip install llama-index-packs-raptor"
+                "Install with: uv sync"
             )
             raise ImportError(
                 "RAPTOR pack not available. Install with: "
-                "pip install llama-index-packs-raptor"
+                "uv sync"
             )
 
         if not documents:

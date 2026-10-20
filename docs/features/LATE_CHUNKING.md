@@ -70,7 +70,7 @@ nodes = chunker.chunk_documents(documents)
 CHUNKING_STRATEGY=late_chunking
 
 # Then run indexing
-python main.py --index
+uv run python main.py --index
 ```
 
 ## Parameters
@@ -145,8 +145,7 @@ Large documents may consume significant memory:
 ## Testing
 
 ```bash
-source venv/bin/activate
-python test_late_chunking.py
+uv run python test_late_chunking.py
 ```
 
 ## Research Background

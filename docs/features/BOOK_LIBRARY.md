@@ -13,13 +13,13 @@ BOOKS_PATH=/path/to/your/books
 CALIBRE_DB_PATH=/path/to/calibre/metadata.db
 
 # 3. Enrich metadata
-python -m cli enrich
+uv run python -m cli enrich
 
 # 4. Index books
-python main.py   # then type: books
+uv run python main.py   # then type: books
 
 # 5. Search
-python main.py   # then type: @books what is deep work
+uv run python main.py   # then type: @books what is deep work
 ```
 
 ## Architecture Overview
@@ -106,13 +106,13 @@ The enrichment pipeline populates a JSON cache with rich metadata for each book.
 
 ```bash
 # Run enrichment (Calibre + optional web)
-python -m cli enrich
+uv run python -m cli enrich
 
 # Clear cache and re-enrich from scratch
-python -m cli enrich --clear-cache
+uv run python -m cli enrich --clear-cache
 
 # Interactive CLI
-python main.py   # then type: enrich
+uv run python main.py   # then type: enrich
 ```
 
 ### Enrichment Stats
@@ -151,7 +151,7 @@ After enrichment, index your books:
 
 ```bash
 # Interactive CLI
-python main.py   # then type: books
+uv run python main.py   # then type: books
 
 # If index already exists, you'll be prompted:
 #   [L]oad existing / [R]ecreate / [S]kip
@@ -170,7 +170,7 @@ Books use a specialized chunker (`BookChunker`):
 ### Interactive CLI
 
 ```bash
-python main.py
+uv run python main.py
 
 # Search all books
 > @books what is deep work
@@ -189,26 +189,26 @@ python main.py
 
 ```bash
 # Search books only
-python -m cli query --query "habits for productivity" --source books
+uv run python -m cli query --query "habits for productivity" --source books
 
 # Search everything including books
-python -m cli query --query "meditation techniques" --source all
+uv run python -m cli query --query "meditation techniques" --source all
 
 # Filter by category
-python -m cli query --query "deep work" --source books --category "productivity"
+uv run python -m cli query --query "deep work" --source books --category "productivity"
 
 # Filter by author
-python -m cli query --query "atomic habits" --source books --author "James Clear"
+uv run python -m cli query --query "atomic habits" --source books --author "James Clear"
 
 # Multiple filters (categories OR within field, AND across fields)
-python -m cli query --query "focus" --source books \
+uv run python -m cli query --query "focus" --source books \
   --category "productivity,habits" \
   --author "Newport,Clear"
 ```
 
 ### Web UI (Streamlit)
 
-1. Run `streamlit run app.py`
+1. Run `uv run streamlit run app.py`
 2. Set search scope to **Both** (federated)
 3. Expand **Book Filters** in the sidebar:
    - **Category multiselect**: Shows all categories with document counts
@@ -280,7 +280,7 @@ Query: "best productivity techniques"
 
 ```bash
 # Interactive CLI
-python main.py
+uv run python main.py
 > @raptor-books what are the best productivity techniques
 
 # The RAPTOR summary index is built automatically on first use
@@ -301,7 +301,7 @@ The books summary RAPTOR index is stored at `data/raptor/books_summary` (separat
 | Poor Calibre matching | Lower `CALIBRE_MATCH_THRESHOLD` (e.g., 0.6) or check filename format (`Author - Title.ext`) |
 | Category filter returns nothing | Use `@books:category` with the normalized category name (lowercase, no extra spaces) |
 | `@raptor-books` is slow first time | The RAPTOR summary index is built on first use; subsequent queries are fast |
-| Stale metadata after adding books | Re-run `python -m cli enrich` then re-index with `books` command |
+| Stale metadata after adding books | Re-run `uv run python -m cli enrich` then re-index with `books` command |
 
 ## Key Files
 

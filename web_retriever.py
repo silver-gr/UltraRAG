@@ -68,7 +68,7 @@ class WebRetriever:
             except ImportError:
                 logger.warning(
                     "tavily-python not installed. "
-                    "Run: pip install tavily-python"
+                    "Run: uv sync"
                 )
                 self.enabled = False
             except Exception as e:
@@ -167,7 +167,7 @@ class WebRetriever:
                 self._crawl4ai_available = False
                 logger.warning(
                     "crawl4ai not installed. Deep extraction disabled. "
-                    "Run: pip install crawl4ai"
+                    "Run: uv add crawl4ai"
                 )
         return self._crawl4ai_available
 

@@ -51,8 +51,14 @@ User management (`uv run python -m scripts.manage_users <cmd>`): `init --admin <
 `add-user --username <name> --role user|admin`, `set-password --username <name>`,
 `set-role --username <name> --role user|admin`, `list-users`.
 
-`setup.sh`, `start.sh`, `run_tests.sh`, `requirements.txt`, README.md and several docs/
-pages still describe the pre-uv pip + `venv/` workflow. Use the uv commands above.
+Wrapper scripts:
+- `./setup.sh`: `uv sync`, then creates `.env` from `.env.example` if missing.
+- `./start.sh`: HTTPS launch via `uv run`, generating dev certs if missing.
+  `ULTRARAG_SERVER_ADDRESS`, `ULTRARAG_SERVER_PORT` and `ULTRARAG_BROWSER_HOST` are shell
+  overrides for `start.sh` only.
+- `run_tests.sh`: `uv run pytest`.
+
+Dependencies live in `pyproject.toml` + `uv.lock` only; there is no `requirements.txt`.
 
 ## 3. Architecture
 
@@ -454,9 +460,9 @@ Guardrails:
 ## 13. Known inconsistencies (verified 2026-10-20)
 
 Fix these when you touch the area, and do not copy them elsewhere:
-- **`.env.example`:** still shows `LLM_MODEL=gemini-3-flash-preview`, while the code
-  default is `gpt-6.1-sol`. About 40 env vars read by the code are missing from it (e.g.
-  `RAPTOR_*`, `WEB_SEARCH_*`, `FEDERATED_*`, `ENABLE_BILINGUAL_EXPANSION`, `TAVILY_API_KEY`).
+- **LLM defaults:** the code defaults pair `LLM_MODEL=gpt-6.1-sol` with `LLM_BACKEND=api`.
+  That model is only reachable through the `openai` proxy backend. A config that sets
+  neither needs `LLM_BACKEND=openai` + `LLM_BASE_URL`, or a Gemini `LLM_MODEL`.
 - **Stale model names:**
   - `tracked_llm.py` and `llm_token_tracker.record_llm_usage` fall back to the model
     name `gemini-3-flash-preview`.
@@ -472,11 +478,6 @@ Fix these when you touch the area, and do not copy them elsewhere:
   /lance.table.VectorIndexDetails, ignoring it`. It is harmless; vector search still uses
   the ANN index.
 - **Version mismatch:** 1.6.1 in CHANGELOG.md, 1.6.0 in `pyproject.toml`.
-- **Pre-uv instructions** remain in:
-  - `setup.sh`, `start.sh` (expects `$HOME/venv`), `run_tests.sh`
-  - `requirements.txt`, which is also out of sync with `pyproject.toml`
-  - README.md, `docs/QUICKSTART.md`, `docs/DEPLOYMENT.md`, `docs/TESTING.md`,
-    `docs/EVALUATION.md`
 
 ## 14. Documentation
 

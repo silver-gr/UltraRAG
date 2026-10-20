@@ -336,7 +336,7 @@ def get_vector_store(
         logger.error(f"Failed to import vector store library: {e}")
         raise ImportError(
             f"Missing required library for {db_type}. "
-            f"Install it with: pip install llama-index-vector-stores-{db_type}"
+            f"Install it with: uv add llama-index-vector-stores-{db_type}"
         ) from e
 
 

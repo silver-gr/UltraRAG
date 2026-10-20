@@ -7,7 +7,7 @@ This guide explains how to enable LangSmith observability in UltraRAG.
 ### 1. Install LangSmith
 
 ```bash
-pip install langsmith
+uv sync --extra eval
 ```
 
 ### 2. Set Environment Variables

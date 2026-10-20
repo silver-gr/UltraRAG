@@ -53,7 +53,8 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 ## Installation
 
 ### Prerequisites
-- Python 3.10+
+- Python 3.13+ (uv installs it if missing)
+- [uv](https://docs.astral.sh/uv/) (`brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`)
 - Your Obsidian vault path
 - API keys (optional, depending on model choice)
 
@@ -62,9 +63,7 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 1. **Clone and setup**
 ```bash
 cd /path/to/UltraRAG
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+uv sync
 ```
 
 2. **Configure environment**
@@ -78,7 +77,7 @@ cp .env.example .env
 
 3. **Run the system**
 ```bash
-python main.py
+uv run python main.py
 ```
 
 ## Configuration
@@ -283,7 +282,7 @@ Results are tagged with 📓 (vault) or 💬 (conversation) so you know the sour
 ### Command Line Interface
 
 ```bash
-python main.py
+uv run python main.py
 ```
 
 This will:

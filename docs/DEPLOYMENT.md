@@ -18,34 +18,33 @@ Create the `certs/` directory in repo root and place the files at those exact pa
 Use the built-in helper script:
 
 ```bash
-cd /Users/silver/Projects/UltraRAG
+cd UltraRAG
 ./scripts/generate_dev_certs.sh
 ```
 
 Then run:
 
 ```bash
-source venv/bin/activate
-streamlit run app.py
+uv run streamlit run app.py
 ```
 
 Open: `https://localhost:9001`
 
 ## VPS / Production Certificates
 
-Use your CA-issued certs (for example Let's Encrypt) and copy/symlink them into:
+Use your CA-issued certs (for example Let's Encrypt) and copy/symlink them into (paths relative to the repo root):
 
-- `/Users/silver/Projects/UltraRAG/certs/frontend.pem`
-- `/Users/silver/Projects/UltraRAG/certs/frontend-key.pem`
+- `certs/frontend.pem`
+- `certs/frontend-key.pem`
 
-Example:
+Example (run from the repo root):
 
 ```bash
-sudo cp /etc/letsencrypt/live/<domain>/fullchain.pem /Users/silver/Projects/UltraRAG/certs/frontend.pem
-sudo cp /etc/letsencrypt/live/<domain>/privkey.pem /Users/silver/Projects/UltraRAG/certs/frontend-key.pem
-sudo chown $USER /Users/silver/Projects/UltraRAG/certs/frontend.pem /Users/silver/Projects/UltraRAG/certs/frontend-key.pem
-chmod 644 /Users/silver/Projects/UltraRAG/certs/frontend.pem
-chmod 600 /Users/silver/Projects/UltraRAG/certs/frontend-key.pem
+sudo cp /etc/letsencrypt/live/<domain>/fullchain.pem certs/frontend.pem
+sudo cp /etc/letsencrypt/live/<domain>/privkey.pem certs/frontend-key.pem
+sudo chown $USER certs/frontend.pem certs/frontend-key.pem
+chmod 644 certs/frontend.pem
+chmod 600 certs/frontend-key.pem
 ```
 
 ## Auth Bootstrap
@@ -58,13 +57,13 @@ Authentication is controlled with:
 Create the initial admin account:
 
 ```bash
-python -m scripts.manage_users init --admin silver
+uv run python -m scripts.manage_users init --admin silver
 ```
 
 Then add user accounts:
 
 ```bash
-python -m scripts.manage_users add-user --username <name> --role user
+uv run python -m scripts.manage_users add-user --username <name> --role user
 ```
 
 ## Optional Reverse Proxy

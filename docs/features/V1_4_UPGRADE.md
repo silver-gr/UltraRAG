@@ -34,7 +34,7 @@
 **Re-indexing is required** because voyage-3.5-lite and voyage-4-lite produce different embedding vectors (different embedding spaces):
 
 ```bash
-python main.py
+uv run python main.py
 > index
 ```
 
@@ -86,7 +86,7 @@ class BilingualStemmer:
 | "σημείωση" | Exact match only | Matches "σημειώσεις", "σημείωση" |
 
 ### Dependencies
-- `PyStemmer` — already in requirements (used internally by `bm25s`)
+- `PyStemmer` — already in `pyproject.toml` (used internally by `bm25s`)
 
 ---
 

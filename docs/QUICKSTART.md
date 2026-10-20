@@ -4,7 +4,8 @@
 Get UltraRAG running with HTTPS (`:9001`) and authentication enabled.
 
 ## Prerequisites
-- Python 3.10+
+- Python 3.13+ (uv installs it if missing)
+- uv (`brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`)
 - OpenSSL (for local dev cert generation)
 - Obsidian vault path
 - API keys (Voyage + Google recommended)
@@ -12,14 +13,14 @@ Get UltraRAG running with HTTPS (`:9001`) and authentication enabled.
 ## 1) Setup
 
 ```bash
-cd /Users/silver/Projects/UltraRAG
+cd UltraRAG
 chmod +x setup.sh
 ./setup.sh
 ```
 
 This script:
-- Creates/uses `/Users/silver/Projects/UltraRAG/venv`
-- Installs `requirements.txt`
+- Checks that uv is installed
+- Runs `uv sync` (creates `.venv` and installs dependencies from `pyproject.toml` / `uv.lock`)
 - Creates `.env` from `.env.example` if missing
 
 ## 2) Configure `.env`
@@ -45,8 +46,8 @@ ULTRARAG_MIN_SECONDS_BETWEEN_QUERIES=2
 ## 3) TLS certificates (required for default Streamlit config)
 
 Expected files:
-- `/Users/silver/Projects/UltraRAG/certs/frontend.pem`
-- `/Users/silver/Projects/UltraRAG/certs/frontend-key.pem`
+- `certs/frontend.pem`
+- `certs/frontend-key.pem`
 
 Generate local self-signed certs:
 
@@ -59,20 +60,19 @@ Generate local self-signed certs:
 Create the first admin user:
 
 ```bash
-python -m scripts.manage_users init --admin silver
+uv run python -m scripts.manage_users init --admin silver
 ```
 
 Optional additional user:
 
 ```bash
-python -m scripts.manage_users add-user --username alice --role user
+uv run python -m scripts.manage_users add-user --username alice --role user
 ```
 
 ## 5) Start the app
 
 ```bash
-source venv/bin/activate
-streamlit run app.py
+uv run streamlit run app.py
 ```
 
 Open:
@@ -85,5 +85,5 @@ Open:
 
 ## Troubleshooting
 - Missing cert files: run `./scripts/generate_dev_certs.sh`.
-- Login fails: run `python -m scripts.manage_users list-users` and reset password if needed.
+- Login fails: run `uv run python -m scripts.manage_users list-users` and reset password if needed.
 - `.env` missing keys: copy from `.env.example` and fill required values.

@@ -64,7 +64,7 @@ try:
         logger.info("LangSmith available but tracing not enabled (set LANGSMITH_TRACING=true)")
 
 except ImportError:
-    logger.debug("LangSmith not installed. Install with: pip install langsmith")
+    logger.debug("LangSmith not installed. Install with: uv sync --extra eval")
     traceable = None
     ls = None
 

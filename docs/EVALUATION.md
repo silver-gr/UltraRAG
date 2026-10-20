@@ -15,16 +15,10 @@ The evaluation system computes four key metrics:
 
 ## Installation
 
-The evaluation dependencies are included in `requirements.txt`:
+The evaluation dependencies (ragas, datasets, langsmith) are in the `eval` extra:
 
 ```bash
-pip install ragas>=0.1.0 datasets>=2.14.0
-```
-
-Or install all dependencies:
-
-```bash
-pip install -r requirements.txt
+uv sync --extra eval
 ```
 
 ## Quick Start
@@ -33,19 +27,19 @@ pip install -r requirements.txt
 
 ```bash
 # Run with default test dataset
-python -m evaluation
+uv run python -m evaluation
 
 # Run with custom dataset
-python -m evaluation --dataset path/to/your/dataset.json
+uv run python -m evaluation --dataset path/to/your/dataset.json
 
 # Specify output directory
-python -m evaluation --output ./my_results
+uv run python -m evaluation --output ./my_results
 
 # Set minimum score threshold (default: 0.5)
-python -m evaluation --threshold 0.7
+uv run python -m evaluation --threshold 0.7
 
 # Don't save report to file
-python -m evaluation --no-save
+uv run python -m evaluation --no-save
 ```
 
 ### Programmatic Usage
@@ -187,14 +181,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          uv sync --extra eval
 
       - name: Setup test vault
         run: |
@@ -209,11 +201,11 @@ jobs:
           export VOYAGE_API_KEY=${{ secrets.VOYAGE_API_KEY }}
           export GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}
           # Create index
-          python -c "from main import UltraRAG; r=UltraRAG(); r.index_vault(force_reindex=True)"
+          uv run python -c "from main import UltraRAG; r=UltraRAG(); r.index_vault(force_reindex=True)"
 
       - name: Run RAGAS evaluation
         run: |
-          python -m evaluation --threshold 0.7
+          uv run python -m evaluation --threshold 0.7
 
       - name: Upload results
         if: always()
@@ -254,16 +246,16 @@ jobs:
 
 Install evaluation dependencies:
 ```bash
-pip install ragas>=0.1.0 datasets>=2.14.0
+uv sync --extra eval
 ```
 
 ### "No existing index found"
 
 Create an index first:
 ```bash
-python main.py  # Interactive mode
+uv run python main.py  # Interactive mode
 # Or programmatically:
-python -c "from main import UltraRAG; r=UltraRAG(); r.index_vault()"
+uv run python -c "from main import UltraRAG; r=UltraRAG(); r.index_vault()"
 ```
 
 ### Evaluation is slow

@@ -300,8 +300,7 @@ This is useful for:
 Run the test suite:
 
 ```bash
-source venv/bin/activate
-python test_self_correction.py
+uv run python test_self_correction.py
 ```
 
 Tests cover:

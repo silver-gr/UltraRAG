@@ -6,10 +6,10 @@ Unit tests for UltraRAG components.
 
 ```bash
 # Run all tests
-pytest
+uv run pytest
 
 # Run with coverage
-pytest --cov=. --cov-report=html
+uv run pytest  # coverage (htmlcov/, coverage.xml) is always on; use --no-cov to disable
 ```
 
 ## Full Documentation
