@@ -80,7 +80,7 @@ stacks - check and test both.
   - Chunking strategies (`CHUNKING_STRATEGY`): `obsidian_aware` (default),
     `markdown_semantic`, `late_chunking`, `semantic`, `markdown`, `simple`.
   - The embedding provider is chosen by substring of the model name: Voyage (default
-    `voyage-4-lite`), local HuggingFace `gte-Qwen2`, or OpenAI.
+    `voyage-4-large`), local HuggingFace `gte-Qwen2`, or OpenAI.
 - **Query:** `query_engine.py` provides `RAGQueryEngine` (vector) and `HybridQueryEngine`
   (vector + BM25 with `BilingualStemmer` for Greek/English, fused with RRF), Voyage
   reranking, and query caching.
@@ -284,11 +284,11 @@ Code defaults (your `.env` may override them):
 | | `LLM_TEMPERATURE`, `LLM_MAX_TOKENS` | 0.1, 65536 |
 | | `LLM_THINKING_EFFORT` | empty = backend default (`none`, `minimal`, `low`, `medium`, `high`) |
 | | `LLM_FALLBACK_MODELS` | empty (comma-separated) |
-| Embeddings | `EMBEDDING_MODEL` | `voyage-4-lite` (200M free tokens) |
+| Embeddings | `EMBEDDING_MODEL` | `voyage-4-large` (the existing index was built with `voyage-4-lite`; Voyage 4 models share one embedding space) |
 | Chunking | `CHUNKING_STRATEGY`, `CHUNK_SIZE`, `CHUNK_OVERLAP` | `obsidian_aware`, 512, 75 |
 | Retrieval | `RETRIEVAL_CANDIDATES` -> `RERANK_TOP_N` | 150 -> 20 |
 | | `TOP_K` (UI display) | 75 |
-| | `RERANKER_MODEL` | `rerank-2.5` |
+| | `RERANKER_MODEL` | `rerank-3` |
 | | `SIMILARITY_THRESHOLD` | 0.3, applied only when no reranker is configured |
 | | `RERANK_SCORE_THRESHOLD` | 0.0 = off (0.1 filters weak reranked hits) |
 | | `ENABLE_HYBRID_SEARCH`, `RRF_K` | true, 60 |

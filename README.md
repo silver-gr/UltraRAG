@@ -28,7 +28,7 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
   - voyage-3-large (highest quality)
   - qwen3-8b (best open-source, self-hosted)
 - ✅ **Vector Database Support**: LanceDB (embedded) or Qdrant (scalable)
-- ✅ **Advanced Reranking**: Voyage rerank-2.5 (200M free tokens/month)
+- ✅ **Advanced Reranking**: Voyage rerank-3 (200M free tokens)
 - ✅ **Hybrid Retrieval**: Vector + query fusion for better results
 - ✅ **Query Transformation**: HyDE, Multi-Query expansion, or both for significantly better retrieval
 - ✅ **PTCF Prompting**: Research-backed prompt engineering for Gemini 3 Flash
@@ -341,7 +341,7 @@ notes = rag.search_notes("project ideas", top_k=5)
     └────┬─────────┘
          │
     ┌────▼─────────┐
-    │  Reranking   │  Voyage rerank-2.5
+    │  Reranking   │  Voyage rerank-3
     └────┬─────────┘
          │
     ┌────▼──────────┐

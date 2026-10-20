@@ -14,7 +14,7 @@ DEFAULT_BOOKS_EXCLUDE_TAGS = ["audio", "notbooks", "have read", "oldstuff", "rea
 
 class EmbeddingConfig(BaseModel):
     """Embedding model configuration."""
-    model: str = Field(default="voyage-4-lite")  # Free tier: 200M tokens (shared embedding space with voyage-4-large)
+    model: str = Field(default="voyage-4-large")  # Voyage 4 models share one embedding space (index built with voyage-4-lite stays valid)
     dimension: int = Field(default=1024)
     chunk_size: int = Field(default=512)
     chunk_overlap: int = Field(default=75)
@@ -94,7 +94,7 @@ class RetrievalConfig(BaseModel):
     top_k: int = Field(default=75)  # Backward compat / UI display count
     retrieval_candidates: int = Field(default=150)  # How many to fetch from vector+BM25 (pre-rerank)
     rerank_top_n: int = Field(default=20)  # How many to keep after reranking
-    reranker_model: str = Field(default="rerank-2.5")  # Voyage model (no "voyage-" prefix!)
+    reranker_model: str = Field(default="rerank-3")  # Voyage model (no "voyage-" prefix!)
     reranker_token_limit: int = Field(default=200_000_000)  # 200M free tier limit
     enable_hybrid_search: bool = Field(default=True)
     enable_graph_search: bool = Field(default=False)
@@ -515,7 +515,7 @@ def load_config() -> RAGConfig:
     return RAGConfig(
         vault_path=Path(vault_path),
         embedding=EmbeddingConfig(
-            model=os.getenv("EMBEDDING_MODEL", "voyage-4-lite"),
+            model=os.getenv("EMBEDDING_MODEL", "voyage-4-large"),
             chunk_size=int(os.getenv("CHUNK_SIZE", "512")),
             chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "75")),
             batch_size=int(os.getenv("BATCH_SIZE", "100")),
@@ -549,7 +549,7 @@ def load_config() -> RAGConfig:
             top_k=int(os.getenv("TOP_K", "75")),
             retrieval_candidates=int(os.getenv("RETRIEVAL_CANDIDATES", "150")),
             rerank_top_n=int(os.getenv("RERANK_TOP_N", "20")),
-            reranker_model=os.getenv("RERANKER_MODEL", "rerank-2.5"),
+            reranker_model=os.getenv("RERANKER_MODEL", "rerank-3"),
             reranker_token_limit=int(os.getenv("RERANKER_TOKEN_LIMIT", "200000000")),
             enable_hybrid_search=os.getenv("ENABLE_HYBRID_SEARCH", "true").lower() == "true",
             enable_graph_search=os.getenv("ENABLE_GRAPH_SEARCH", "false").lower() == "true",

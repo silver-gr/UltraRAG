@@ -76,7 +76,7 @@ class VoyageTokenTracker:
 
                 emb_data = data.get('embedding', {})
                 self.embedding_usage = TokenUsage(
-                    model=emb_data.get('model', 'voyage-4-lite'),
+                    model=emb_data.get('model', 'voyage-4-large'),
                     tokens_used=emb_data.get('tokens_used', 0),
                     token_limit=self.embedding_limit,
                     requests_count=emb_data.get('requests_count', 0),
@@ -88,7 +88,7 @@ class VoyageTokenTracker:
                 )
 
                 self.rerank_usage = TokenUsage(
-                    model=data.get('rerank', {}).get('model', 'voyage-rerank-2.5'),
+                    model=data.get('rerank', {}).get('model', 'rerank-3'),
                     tokens_used=data.get('rerank', {}).get('tokens_used', 0),
                     token_limit=self.rerank_limit,
                     requests_count=data.get('rerank', {}).get('requests_count', 0),
@@ -113,11 +113,11 @@ class VoyageTokenTracker:
     def _init_fresh(self) -> None:
         """Initialize fresh usage tracking."""
         self.embedding_usage = TokenUsage(
-            model='voyage-4-lite',
+            model='voyage-4-large',
             token_limit=self.embedding_limit
         )
         self.rerank_usage = TokenUsage(
-            model='voyage-rerank-2.5',
+            model='rerank-3',
             token_limit=self.rerank_limit
         )
         self.embedding_history = []

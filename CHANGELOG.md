@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Default embedding model `voyage-4-large`** (was `voyage-4-lite`, whose free tier is used
+  up). All Voyage 4 models share one embedding space, so indexes built with `voyage-4-lite`
+  stay valid: queries and newly indexed documents use `voyage-4-large`, no re-index needed.
+- **Default reranker `rerank-3`** (was `rerank-2.5`): same API, price and score calibration.
+
 ### Removed
 - **Gemini CLI LLM backend** (`LLM_BACKEND=cli`, `gemini_cli.py`). Use `LLM_BACKEND=openai`
   with an OpenAI-compatible gateway (e.g. LiteLLM) instead. A leftover `LLM_BACKEND=cli`

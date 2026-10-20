@@ -62,7 +62,7 @@ class TestEmbeddingConfig:
     def test_default_values(self):
         """Test default configuration values."""
         config = EmbeddingConfig()
-        assert config.model == "voyage-4-lite"
+        assert config.model == "voyage-4-large"
         assert config.dimension == 1024
         assert config.chunk_size == 512
         assert config.chunk_overlap == 75
@@ -185,7 +185,7 @@ class TestRetrievalConfig:
         assert config.top_k == 75
         assert config.retrieval_candidates == 150  # Over-fetch for reranker
         assert config.rerank_top_n == 20  # Keep top 20 after reranking
-        assert config.reranker_model == "rerank-2.5"  # No "voyage-" prefix!
+        assert config.reranker_model == "rerank-3"  # No "voyage-" prefix!
         assert config.enable_hybrid_search is True
         assert config.similarity_threshold == 0.3  # Lowered from 0.7
         assert config.validate_responses is True
@@ -357,7 +357,7 @@ class TestLoadConfig:
         config = load_config()
 
         # Should use defaults
-        assert config.embedding.model == "voyage-4-lite"
+        assert config.embedding.model == "voyage-4-large"
         assert config.embedding.chunk_size == 512
         assert config.llm.temperature == 0.1
         assert config.vector_db.db_type == "lancedb"

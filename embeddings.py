@@ -256,7 +256,7 @@ def get_embedding_model(
 
 
 def get_reranker(
-    model_name: str = "voyage-rerank-2.5",
+    model_name: str = "rerank-3",
     api_key: Optional[Union[str, SecretStr]] = None,
     top_n: int = 10,
     enable_tracking: bool = True
@@ -264,7 +264,7 @@ def get_reranker(
     """Initialize reranker model.
 
     Args:
-        model_name: Reranker model name (default: voyage-rerank-2.5)
+        model_name: Reranker model name (default: rerank-3)
         api_key: Optional API key
         top_n: Number of top results to return
         enable_tracking: Enable token usage tracking for Voyage models (default: True)
