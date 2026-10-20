@@ -5,7 +5,7 @@
 > This is the **original research and planning document** from November 2024 that guided UltraRAG's development. While the architectural principles remain valid, specific recommendations (model names, pricing, configurations) may be outdated.
 >
 > **For current configuration, see:**
-> - [CLAUDE.md](../../CLAUDE.md) - Current defaults and usage
+> - [AGENTS.md](../../AGENTS.md) - Current defaults and usage
 > - [.env.example](../../.env.example) - Configuration reference
 > - [config.py](../../config.py) - Actual default values
 >

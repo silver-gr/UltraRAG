@@ -34,7 +34,7 @@ Detailed guides for each advanced feature:
 ## Quick Links
 
 - **Main README**: [../README.md](../README.md)
-- **Claude Code Guide**: [../CLAUDE.md](../CLAUDE.md)
+- **Coding Agent Guide**: [../AGENTS.md](../AGENTS.md)
 - **Tests README**: [../tests/README.md](../tests/README.md)
 
 ## Documentation Map

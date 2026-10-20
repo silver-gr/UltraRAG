@@ -7,7 +7,7 @@ Use this prompt in a new Claude Code session from the UltraRAG project root.
 <context>
 You are analyzing UltraRAG, a production RAG system for Obsidian vaults, against 23 open-source RAG implementations. The goal is to identify where UltraRAG leads, where it lags, and what features are worth adopting.
 
-UltraRAG's architecture is documented in CLAUDE.md. The competitor list is in docs/COMPETITOR_RAG_SYSTEMS.md. Each competitor is a GitHub repo you can fetch READMEs from.
+UltraRAG's architecture is documented in AGENTS.md. The competitor list is in docs/COMPETITOR_RAG_SYSTEMS.md. Each competitor is a GitHub repo you can fetch READMEs from.
 
 This analysis matters because UltraRAG is a personal tool being refined iteratively. Understanding the competitive landscape reveals blind spots and validates existing design choices. We care about practical capability, not star counts.
 </context>
@@ -16,7 +16,7 @@ This analysis matters because UltraRAG is a personal tool being refined iterativ
 Conduct a structured competitive analysis of UltraRAG against the RAG systems listed in docs/COMPETITOR_RAG_SYSTEMS.md.
 
 Phase 1 - Understand UltraRAG:
-Read CLAUDE.md to extract UltraRAG's full feature set. Build the feature taxonomy from what actually exists in the codebase.
+Read AGENTS.md to extract UltraRAG's full feature set. Build the feature taxonomy from what actually exists in the codebase.
 
 Phase 2 - Research competitors:
 For each of the top 12 competitors (by relevance, not stars), fetch their GitHub README to extract:
