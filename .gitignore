@@ -85,3 +85,14 @@ refactor_audit.json
 
 # Serena MCP local state (tool removed; never commit)
 .serena/
+
+# Streamlit agent skills (environment-specific symlinks)
+.agents/skills/developing-with-streamlit
+.claude/skills/developing-with-streamlit
+
+# repowise local index, caches and owner-digest key
+.repowise/
+
+# Local agent tooling (machine-specific paths / auto-generated; AGENTS.md is the only agent-instructions file)
+.mcp.json
+.github/copilot-instructions.md
