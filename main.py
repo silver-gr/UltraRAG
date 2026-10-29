@@ -646,7 +646,11 @@ class UltraRAG:
 
         # Get all note paths
         print(f"\nScanning notes from: {self.config.vault_path}")
-        note_paths = list(self.config.vault_path.rglob("*.md"))
+        # Skip dot-folders/files (.obsidian, .claude, .trash, ...), as Obsidian does
+        note_paths = [
+            p for p in self.config.vault_path.rglob("*.md")
+            if not any(part.startswith('.') for part in p.relative_to(self.config.vault_path).parts)
+        ]
         logger.info(f"Found {len(note_paths)} notes to index")
         print(f"Found {len(note_paths)} notes total")
 

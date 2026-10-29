@@ -222,6 +222,18 @@ class TestVaultLoading:
         # Should only load .md files
         assert len(notes) == 2
 
+    @pytest.mark.unit
+    def test_load_vault_skips_hidden_folders(self, temp_vault, create_test_note, sample_note_content):
+        """Test that notes inside dot-folders (.obsidian, .claude, ...) are skipped at any depth."""
+        create_test_note("note1.md", sample_note_content)
+        create_test_note(".obsidian/plugins/x/README.md", sample_note_content)
+        create_test_note(".claude/skills/SKILL.md", sample_note_content)
+        create_test_note("Inbox/template/.claude/rules.md", sample_note_content)
+
+        loader = ObsidianLoader(temp_vault)
+        notes = loader.load_vault()
+        assert [n.path.name for n in notes] == ["note1.md"]
+
 
 class TestDocumentConversion:
     """Test conversion of notes to documents."""

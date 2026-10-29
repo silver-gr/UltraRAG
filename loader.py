@@ -146,6 +146,12 @@ class ObsidianLoader:
             for ext in extensions:
                 markdown_files.extend(self.vault_path.rglob(f'*{ext}'))
 
+            # Skip dot-folders/files (.obsidian, .claude, .trash, ...), as Obsidian does
+            markdown_files = [
+                f for f in markdown_files
+                if not any(part.startswith('.') for part in f.relative_to(self.vault_path).parts)
+            ]
+
             total_files = len(markdown_files)
             logger.info(f"Found {total_files} notes in vault")
 
