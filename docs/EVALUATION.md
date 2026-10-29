@@ -1,5 +1,10 @@
 # RAGAS Automated Evaluation
 
+> **Retrieval-only evaluation (recommended first):** see [`features/GOLDEN_SET_EVAL.md`](features/GOLDEN_SET_EVAL.md)
+> for the document-level golden set and the ablation runner (`scripts/golden_set.py`,
+> `scripts/run_ablation.py`). It scores retrieval without an LLM judge and is the tool for
+> deciding which retrieval flags help. RAGAS (below) scores the generated answers.
+
 UltraRAG includes automated evaluation using the [RAGAS](https://github.com/explodinggradients/ragas) framework to measure RAG system quality objectively.
 
 ## Overview

@@ -96,3 +96,6 @@ refactor_audit.json
 # Local agent tooling (machine-specific paths / auto-generated; AGENTS.md is the only agent-instructions file)
 .mcp.json
 .github/copilot-instructions.md
+
+# Golden-set eval data: real queries + vault excerpts (personal; repo is public)
+tests/golden/
