@@ -291,6 +291,18 @@ def get_vector_store(
                 logger.error(f"Failed to connect to LanceDB: {e}", exc_info=True)
                 raise RuntimeError(f"Failed to connect to LanceDB: {e}") from e
 
+            # LlamaIndex's LanceDBVectorStore only honours mode="overwrite" when it
+            # CREATES the table; an existing table is opened and appended to. That
+            # silently turned every "recreate index" into an append (duplicate
+            # chunks, stale paths, schema drift). Drop it ourselves first.
+            if mode == "overwrite":
+                tables_resp = db.list_tables()
+                existing = tables_resp.tables if hasattr(tables_resp, "tables") else tables_resp
+                if table_name in existing:
+                    db.drop_table(table_name)
+                    logger.info(f"Dropped existing LanceDB table for overwrite: {table_name}")
+                    print(f"Dropped existing table '{table_name}' (overwrite mode)")
+
             vector_store = LanceDBVectorStore(
                 uri=str(config.lancedb_path),
                 table_name=table_name,
