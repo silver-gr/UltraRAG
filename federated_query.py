@@ -329,13 +329,15 @@ class FederatedRetriever(BaseRetriever):
                     for source in self.sources
                 }
 
+                # No timeout: leaving this block waits for every source anyway, so a timeout
+                # could only discard a slow source's finished results.
                 for future in futures:
                     try:
-                        nodes = future.result(timeout=30)
+                        nodes = future.result()
                         all_nodes.extend(nodes)
                     except Exception as e:
                         source = futures[future]
-                        logger.error(f"Timeout/error retrieving from {source.name}: {e}")
+                        logger.error(f"Error retrieving from {source.name}: {e}")
         else:
             # Sequential retrieval
             for source in self.sources:

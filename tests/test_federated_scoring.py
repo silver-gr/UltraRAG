@@ -265,6 +265,38 @@ class TestRankNormalisedMerge:
         assert merged[-1].score == 0.0
 
 
+class TestParallelRetrieval:
+    def test_a_slow_source_is_not_dropped(self, monkeypatch):
+        """Waiting on one future at a time with a timeout dropped whichever source came first."""
+
+        class AlwaysTooSlow:
+            def __init__(self, value):
+                self.value = value
+
+            def result(self, timeout=None):
+                if timeout is not None:
+                    raise TimeoutError
+                return self.value
+
+        class Executor:
+            def __init__(self, max_workers):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def submit(self, fn, *args):
+                return AlwaysTooSlow(fn(*args))
+
+        monkeypatch.setattr("federated_query.ThreadPoolExecutor", Executor)
+        retriever = FederatedRetriever(_two_scale_sources(), _config(), parallel=True)
+
+        assert {_origin(n) for n in retriever.retrieve(QUERY)} == {"rrf_source", "cosine_source"}
+
+
 class TestMergeStillDedupesAndCaps:
     def test_per_document_cap_applies_after_the_merge_sort(self):
         sources = [
