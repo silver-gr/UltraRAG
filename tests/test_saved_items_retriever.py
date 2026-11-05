@@ -61,9 +61,10 @@ def run_query(monkeypatch):
         "saved_items_retriever.Settings", SimpleNamespace(embed_model=embed_model)
     )
 
-    def _run(config):
+    def _run(config, allowed_item_ids=None):
         query = StubQuery()
         retriever = SavedItemsRetriever(config)
+        retriever.allowed_item_ids = allowed_item_ids
         retriever._table = SimpleNamespace(search=lambda _vector: query)
         retriever._validated = True
         return query, retriever._retrieve(QueryBundle(query_str="dopamine"))
@@ -124,6 +125,35 @@ class TestQualityPredicate:
         assert query.where_calls == [(QUALITY, True)]
 
 
+class TestViewerScope:
+    def test_scope_prefilters_by_item_id_and_skips_quality_filter(self, run_query):
+        query, nodes = run_query(SavedItemsConfig(), allowed_item_ids={"item-2", "item-1"})
+
+        assert query.where_calls == [("item_id IN ('item-1', 'item-2')", True)]
+        assert nodes[0].node.metadata["file_path"] == "item-1"
+
+    def test_unscoped_query_keeps_quality_filter(self, run_query):
+        query, _ = run_query(SavedItemsConfig(), allowed_item_ids=None)
+
+        assert query.where_calls == [(QUALITY, True)]
+
+    def test_scope_is_anded_with_operator_predicate(self, run_query):
+        query, _ = run_query(SavedItemsConfig(where="source = 'web'"), allowed_item_ids={"a"})
+
+        assert query.where_calls == [("item_id IN ('a') AND (source = 'web')", True)]
+
+    def test_item_ids_are_escaped(self, run_query):
+        query, _ = run_query(SavedItemsConfig(), allowed_item_ids={"o'brien"})
+
+        assert query.where_calls == [("item_id IN ('o''brien')", True)]
+
+    def test_empty_scope_returns_nothing_without_querying(self, run_query):
+        query, nodes = run_query(SavedItemsConfig(), allowed_item_ids=set())
+
+        assert nodes == []
+        assert query.selected is None
+
+
 class TestX3lixiContract:
     def test_select_and_node_metadata_shape_are_unchanged(self, run_query):
         """ultrarag_service.py wraps _retrieve and post-filters on metadata['file_path']."""
@@ -136,6 +166,19 @@ class TestX3lixiContract:
         assert nodes[0].node.metadata["file_path"] == "item-1"
         assert nodes[0].node.node_id == "saved_items:item-1:2"
         assert nodes[0].score == pytest.approx(0.75)
+
+    @pytest.mark.usefixtures("run_query")  # stubs the embedding model
+    def test_wrapping_retrieve_still_works_during_the_transition(self):
+        """x3lixi's current monkey-patch replaces _retrieve on the instance."""
+        retriever = SavedItemsRetriever(SavedItemsConfig())
+        retriever._table = SimpleNamespace(search=lambda _vector: StubQuery())
+        retriever._validated = True
+        original = retriever._retrieve
+        retriever._retrieve = lambda bundle: [
+            n for n in original(bundle) if n.node.metadata["file_path"] == "someone-else"
+        ]
+
+        assert retriever.retrieve(QueryBundle(query_str="dopamine")) == []
 
 
 class TestValidateLogging:

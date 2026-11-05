@@ -39,6 +39,11 @@ def _coalesce_str(*values: object, fallback: str = "") -> str:
     return fallback
 
 
+def _sql_quote(value: str) -> str:
+    """Escape a string literal for a LanceDB filter expression."""
+    return "'" + value.replace("'", "''") + "'"
+
+
 def _safe_int(value: object, default: int = 0) -> int:
     """Parse int from mixed LanceDB/pandas values."""
     if _is_null(value):
@@ -62,17 +67,22 @@ class SavedItemsRetriever(BaseRetriever):
         self._top_k = top_k
         self._table = None
         self._validated = False
-        self._where = self._build_where(config)
+        # Item ids a scoped caller may see (x3lixi's per-viewer queries). None = unscoped.
+        self.allowed_item_ids: Optional[set[str]] = None
         super().__init__()
 
-    @staticmethod
-    def _build_where(config: "SavedItemsConfig") -> Optional[str]:
-        """LanceDB predicate from the quality filter and the operator's extra predicate."""
+    def _build_where(self) -> Optional[str]:
+        """LanceDB predicate: the viewer's scope or the quality filter, plus the operator's."""
         clauses = []
-        if config.min_quality_filter:
+        if self.allowed_item_ids is not None:
+            # No quality filter when scoped, same as x3lixi's semantic search: user items may
+            # have no enrichment scores.
+            ids = ", ".join(_sql_quote(item_id) for item_id in sorted(map(str, self.allowed_item_ids)))
+            clauses.append(f"item_id IN ({ids})")
+        elif self._config.min_quality_filter:
             clauses.append("(usefulness_score > 0 OR relevance_score > 0)")
-        if config.where:
-            clauses.append(f"({config.where})")
+        if self._config.where:
+            clauses.append(f"({self._config.where})")
         return " AND ".join(clauses) or None
 
     def validate(self) -> bool:
@@ -93,7 +103,7 @@ class SavedItemsRetriever(BaseRetriever):
                 return False
 
             self._table = db.open_table(self._config.table_name)
-            logger.info(f"saved_items predicate: {self._where or 'none'}")
+            logger.info(f"saved_items predicate: {self._build_where() or 'none'}")
 
             # Validate vector field exists and dimension matches current embed model
             schema = self._table.schema
@@ -134,6 +144,10 @@ class SavedItemsRetriever(BaseRetriever):
         if not self.validate():
             return []
 
+        # An empty scope matches nothing, and IN () is not valid SQL
+        if self.allowed_item_ids is not None and not self.allowed_item_ids:
+            return []
+
         try:
             # Embed query using the shared embedding model
             query_vector = Settings.embed_model.get_query_embedding(
@@ -141,9 +155,10 @@ class SavedItemsRetriever(BaseRetriever):
             )
 
             query = self._table.search(query_vector).metric("cosine")
-            if self._where:
+            where = self._build_where()
+            if where:
                 # Prefilter so filtered-out rows don't use up top_k slots
-                query = query.where(self._where, prefilter=True)
+                query = query.where(where, prefilter=True)
 
             # Search — explicitly exclude heavy vector column, include _distance
             results = (

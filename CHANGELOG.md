@@ -23,8 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Saved-items quality filter**: `SavedItemsRetriever` now pre-filters with
   `usefulness_score > 0 OR relevance_score > 0`, matching x3lixi's unscoped search. New env
   vars: `SAVED_ITEMS_MIN_QUALITY_FILTER` (default `true`) and `SAVED_ITEMS_WHERE` (extra
-  predicate). The filter also applies to x3lixi's per-user scoped queries, which x3lixi's own
-  search exempts; see `docs/features/FEDERATED_SCORING.md`.
+  predicate).
+- **Saved-items viewer scope**: `SavedItemsRetriever.allowed_item_ids` limits a query to a set of
+  items with a pre-filter and skips the quality filter, as x3lixi's own search does for scoped
+  queries. It replaces post-filtering, which could leave a sparse scope with no results.
 - **Federated engine without a real reranker** no longer applies `SIMILARITY_THRESHOLD` or
   `get_reranker`'s cosine-cutoff fallback: merged scores are rank-based, so a cosine cutoff would
   remove every result.

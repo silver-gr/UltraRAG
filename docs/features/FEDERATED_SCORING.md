@@ -58,8 +58,7 @@ The active predicate is logged once when the table is opened. Items that x3lixi 
 eligible (dead links, rejected, archived) can't be detected from these columns. The x3lixi side has
 to remove them from the table.
 
-**Scoped queries:** x3lixi's own search skips this rule when scoped to a viewer's library, because
-user items may have no enrichment scores. `ultrarag_service.py` scopes UltraRAG by wrapping
-`_retrieve`, and the filter runs inside the wrapped call. A viewer's unscored items are therefore
-removed before the scope check, unless x3lixi sets `SAVED_ITEMS_MIN_QUALITY_FILTER=false` for its
-scoped calls. It starts a new process per query, so it can set this per call.
+**Scoped queries:** set `retriever.allowed_item_ids` to a set of item ids to limit a query to one
+viewer's library. The retriever then pre-filters on `item_id IN (...)` and skips the quality filter,
+because user items may have no enrichment scores. x3lixi's semantic search follows the same rule.
+`SAVED_ITEMS_WHERE` still applies. An empty set returns nothing, and `None` means unscoped.
