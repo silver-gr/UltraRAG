@@ -14,6 +14,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# These models share one embedding space, so a table built with one is valid for the others.
+_VOYAGE_4_FAMILY = {"voyage-4", "voyage-4-large", "voyage-4-lite"}
+
 
 def _is_null(value) -> bool:
     """Return True for None/NaN/pandas.NA-like values."""
@@ -62,9 +65,16 @@ class SavedItemsRetriever(BaseRetriever):
     results as TextNode / NodeWithScore for use in the federated engine.
     """
 
-    def __init__(self, config: "SavedItemsConfig", top_k: int = 75):
+    def __init__(
+        self,
+        config: "SavedItemsConfig",
+        top_k: int = 75,
+        embedding_model: Optional[str] = None,
+    ):
         self._config = config
         self._top_k = top_k
+        self._embedding_model = embedding_model
+        self._has_context = False
         self._table = None
         self._validated = False
         # Item ids a scoped caller may see (x3lixi's per-viewer queries). None = unscoped.
@@ -85,6 +95,25 @@ class SavedItemsRetriever(BaseRetriever):
             clauses.append(f"({self._config.where})")
         return " AND ".join(clauses) or None
 
+    def _model_check_passes(self) -> bool:
+        """Compare the model that embedded the table with the configured one."""
+        rows = self._table.search().select(["embedding_model"]).limit(1).to_pandas()
+        table_model = _coalesce_str(*rows["embedding_model"])
+        configured = self._embedding_model
+        if (
+            not table_model
+            or not configured
+            or table_model == configured
+            or {table_model, configured} <= _VOYAGE_4_FAMILY
+        ):
+            return True
+        strict = self._config.strict_model_check
+        logger.warning(
+            f"saved_items embedding model mismatch: table={table_model}, "
+            f"configured={configured}.{' Disabling saved_items.' if strict else ''}"
+        )
+        return not strict
+
     def validate(self) -> bool:
         """Open table and validate embedding dimension. Idempotent (cached after first call)."""
         if self._validated:
@@ -94,8 +123,8 @@ class SavedItemsRetriever(BaseRetriever):
             import lancedb
 
             db = lancedb.connect(str(self._config.shared_lancedb_path))
-            available = db.table_names()
-            if self._config.table_name not in available:
+            # table_names() returns only the first 10 names; list_tables() returns them all.
+            if self._config.table_name not in db.list_tables().tables:
                 logger.warning(
                     f"Table '{self._config.table_name}' not found in shared LanceDB at "
                     f"{self._config.shared_lancedb_path}"
@@ -114,6 +143,15 @@ class SavedItemsRetriever(BaseRetriever):
                 logger.warning(
                     "saved_items table missing 'vector' field or unexpected schema"
                 )
+                self._table = None
+                return False
+
+            # Selecting a column the table lacks raises, and tables gain these only on rebuild
+            columns = {f.name for f in schema}
+            self._has_context = "context" in columns
+
+            # Before the dim check, which returns early when the embedder is unreachable
+            if "embedding_model" in columns and not self._model_check_passes():
                 self._table = None
                 return False
 
@@ -178,6 +216,7 @@ class SavedItemsRetriever(BaseRetriever):
                         "chunk_index",
                         "usefulness_score",
                         "_distance",
+                        *(["context"] if self._has_context else []),
                     ]
                 )
                 .to_pandas()
@@ -204,10 +243,12 @@ class SavedItemsRetriever(BaseRetriever):
             domain = _coalesce_str(row.get("domain"), fallback="") or None
             url = _coalesce_str(row.get("url"), fallback="") or None
             title = _coalesce_str(row.get("title"), fallback="Untitled Item")
+            body = str(row.get("text", "") or "")
+            context = _coalesce_str(row.get("context"))
 
             node = TextNode(
                 id_=f"saved_items:{item_id}:{chunk_index}",
-                text=str(row.get("text", "") or ""),
+                text=f"{context}\n---\n{body}" if context else body,
                 metadata={
                     "title": title,
                     "url": url,
@@ -221,7 +262,12 @@ class SavedItemsRetriever(BaseRetriever):
                     # display_label used in UI instead of raw item_id
                     "display_label": domain or "saved item",
                 },
+                # chunk_body repeats the text, so in metadata it would send every chunk twice
+                excluded_llm_metadata_keys=["chunk_body"],
+                excluded_embed_metadata_keys=["chunk_body"],
             )
+            if context:
+                node.metadata["chunk_body"] = body
             nodes.append(NodeWithScore(node=node, score=score))
 
         return nodes

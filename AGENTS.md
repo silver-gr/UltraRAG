@@ -306,7 +306,7 @@ Code defaults (your `.env` may override them):
 | | `RESEARCH_MAX_SUBQUERIES`, `RESEARCH_GAP_ANALYSIS_TOP_N`, `RESEARCH_MAX_SYNTHESIS_SOURCES` | 3, 40, 0 |
 | Conversations | `CONVERSATIONS_ENABLED`, `CONVERSATIONS_PATH`, `CONVERSATIONS_WEIGHT` | false, unset, 0.8 |
 | Books | `BOOKS_ENABLED`, `BOOKS_PATH`, `CALIBRE_DB_PATH`, `BOOKS_WEIGHT` | false, unset, unset, 0.9 |
-| Saved items | `SAVED_ITEMS_ENABLED`, `SAVED_ITEMS_LANCEDB_PATH`, `SAVED_ITEMS_WEIGHT`, `SAVED_ITEMS_MIN_QUALITY_FILTER`, `SAVED_ITEMS_WHERE` | false, `~/Projects/shared-data/lancedb`, 0.5, true, unset |
+| Saved items | `SAVED_ITEMS_ENABLED`, `SAVED_ITEMS_LANCEDB_PATH`, `SAVED_ITEMS_WEIGHT`, `SAVED_ITEMS_MIN_QUALITY_FILTER`, `SAVED_ITEMS_WHERE`, `SAVED_ITEMS_STRICT_MODEL_CHECK` | false, `~/Projects/shared-data/lancedb`, 0.5, true, unset, false |
 | Web search | `WEB_SEARCH_ENABLED`, `WEB_SEARCH_WEIGHT`, `WEB_SEARCH_MAX_RESULTS`, `WEB_SEARCH_IN_RESEARCH` | false, 0.7, 5, true |
 | RAPTOR | `ENABLE_RAPTOR`, `RAPTOR_MODE`, `RAPTOR_CHUNK_SIZE`, `RAPTOR_TOP_K` | false, `collapsed`, 1024 (must exceed metadata size), 10 |
 | Federated | `FEDERATED_TOP_K_PER_SOURCE`, `FEDERATED_FINAL_TOP_K` | 100, 120 |

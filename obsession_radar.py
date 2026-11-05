@@ -28,18 +28,21 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from dotenv import load_dotenv
+
 logger = logging.getLogger("obsession_radar")
 
 # ---------------------------------------------------------------------------
 # LanceDB source paths (mirrors content_research_engine.py)
 # ---------------------------------------------------------------------------
+load_dotenv()
 ULTRARAG_LANCEDB_PATH = Path(__file__).parent / "data" / "lancedb"
 SHARED_LANCEDB_PATH = Path.home() / "Projects" / "shared-data" / "lancedb"
 
 TABLE_NAMES = {
     "vault": "obsidian_embeddings",
     "conversations": "conversations",
-    "saved_items": "saved_items",
+    "saved_items": os.getenv("SAVED_ITEMS_TABLE_NAME", "saved_items"),
 }
 
 # Default paths to file-based sources

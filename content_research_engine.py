@@ -6,17 +6,21 @@ and cosine-similarity-based deduplication across vault, conversations, and saved
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
 # Source priority for deduplication (higher index = higher priority)
 SOURCE_PRIORITY = {"saved_items": 0, "conversations": 1, "vault": 2}
+
+load_dotenv()
 
 # LanceDB paths per source
 ULTRARAG_LANCEDB_PATH = Path(__file__).parent / "data" / "lancedb"
@@ -26,7 +30,7 @@ SHARED_LANCEDB_PATH = Path.home() / "Projects" / "shared-data" / "lancedb"
 TABLE_NAMES = {
     "vault": "obsidian_embeddings",
     "conversations": "conversations",
-    "saved_items": "saved_items",
+    "saved_items": os.getenv("SAVED_ITEMS_TABLE_NAME", "saved_items"),
 }
 
 
@@ -195,7 +199,7 @@ def _search_source(
 
         # Check if table exists
         try:
-            available_tables = db.table_names()
+            available_tables = db.list_tables().tables
         except Exception:
             available_tables = []
         if table_name not in available_tables:

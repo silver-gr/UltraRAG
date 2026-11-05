@@ -1,15 +1,27 @@
 """SavedItemsRetriever pre-filters the kNN with the same quality rule as x3lixi's own search."""
 import logging
+import os
+import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import lancedb
 import pandas as pd
 import pytest
-from llama_index.core.schema import QueryBundle
+from llama_index.core import Settings
+from llama_index.core.llms import MockLLM
+from llama_index.core.retrievers import BaseRetriever
+from llama_index.core.schema import MetadataMode, NodeWithScore, QueryBundle, TextNode
 
-from config import SavedItemsConfig, load_config
+import content_research_engine
+from config import EmbeddingConfig, RetrievalConfig, SavedItemsConfig, load_config
+from federated_query import FederatedQueryEngine, FederatedRetriever, IndexSource
+from main import UltraRAG, _source_excerpt
+from query_engine import SourceNumberingPostprocessor
 from saved_items_retriever import SavedItemsRetriever
+from self_correction import SelfCorrectingRetriever
 
 pytestmark = pytest.mark.unit
 
@@ -78,6 +90,7 @@ def _config_from_env(monkeypatch, temp_vault, **env):
     monkeypatch.setenv("VOYAGE_API_KEY", "test-key")
     monkeypatch.delenv("SAVED_ITEMS_MIN_QUALITY_FILTER", raising=False)
     monkeypatch.delenv("SAVED_ITEMS_WHERE", raising=False)
+    monkeypatch.delenv("SAVED_ITEMS_STRICT_MODEL_CHECK", raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     return load_config().saved_items
@@ -188,7 +201,10 @@ class TestValidateLogging:
         table = SimpleNamespace(
             schema=[SimpleNamespace(name="vector", type=SimpleNamespace(list_size=3))]
         )
-        db = SimpleNamespace(table_names=lambda: ["saved_items"], open_table=lambda _name: table)
+        db = SimpleNamespace(
+            list_tables=lambda: SimpleNamespace(tables=["saved_items"]),
+            open_table=lambda _name: table,
+        )
         monkeypatch.setitem(sys.modules, "lancedb", SimpleNamespace(connect=lambda _path: db))
         monkeypatch.setattr(
             "saved_items_retriever.Settings",
@@ -203,3 +219,371 @@ class TestValidateLogging:
         assert [r.getMessage() for r in caplog.records if QUALITY in r.getMessage()] == [
             f"saved_items predicate: {QUALITY}"
         ]
+
+
+BODY = "the chunk body"
+HEADER = "[web · example.com · post] Title\nTopics: habits"
+TABLE_ROW = {
+    "vector": [1.0, 0.0, 0.0],
+    "text": BODY,
+    "title": "Title",
+    "url": "https://example.com/a",
+    "domain": "example.com",
+    "source": "web",
+    "tags": "",
+    "item_id": "item-1",
+    "chunk_index": 0,
+    "usefulness_score": 50,
+    "relevance_score": 50,
+}
+
+
+@pytest.fixture
+def make_retriever(monkeypatch, tmp_path):
+    """A retriever over a real LanceDB table holding the given row overrides."""
+    embed_model = Mock(get_query_embedding=Mock(return_value=[1.0, 0.0, 0.0]))
+    monkeypatch.setattr("saved_items_retriever.Settings", SimpleNamespace(embed_model=embed_model))
+
+    def _make(rows, embedding_model=None, **config):
+        lancedb.connect(str(tmp_path)).create_table(
+            "saved_items", data=[{**TABLE_ROW, **row} for row in rows]
+        )
+        return SavedItemsRetriever(
+            SavedItemsConfig(shared_lancedb_path=tmp_path, **config),
+            embedding_model=embedding_model,
+        )
+
+    return _make
+
+
+def _retrieve(retriever):
+    return retriever.retrieve(QueryBundle(query_str="dopamine"))
+
+
+class TestTableLookup:
+    @staticmethod
+    def _crowd_store(path):
+        db = lancedb.connect(str(path))
+        for index in range(12):
+            db.create_table(f"a{index:02d}", data=[{"x": index}])
+
+    def test_validate_finds_a_table_past_the_first_listing_page(self, make_retriever, tmp_path):
+        self._crowd_store(tmp_path)
+
+        assert make_retriever([{}]).validate() is True
+
+    def test_research_search_finds_a_table_past_the_first_listing_page(
+        self, monkeypatch, tmp_path
+    ):
+        self._crowd_store(tmp_path)
+        lancedb.connect(str(tmp_path)).create_table("saved_items", data=[TABLE_ROW])
+        monkeypatch.setattr(content_research_engine, "_get_lancedb_path", lambda _source: tmp_path)
+
+        results = content_research_engine._search_source(
+            "saved_items", [1.0, 0.0, 0.0], weight=1.0, top_k=5, threshold=0.0
+        )
+
+        assert len(results) == 1
+
+    def test_research_tools_read_the_configured_table_name(self):
+        probe = (
+            "import content_research_engine as c, obsession_radar as o\n"
+            "print(c.TABLE_NAMES['saved_items'], o.TABLE_NAMES['saved_items'])\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=Path(__file__).resolve().parents[1],
+            env={**os.environ, "SAVED_ITEMS_TABLE_NAME": "saved_items_v2"},
+        )
+
+        assert result.stdout.split() == ["saved_items_v2", "saved_items_v2"]
+
+
+class TestSelfCorrectionSeesTheChunk:
+    LONG_HEADER = "[web] Title\nSummary: " + "item level summary " * 40
+
+    def _retriever(self, llm):
+        node = NodeWithScore(
+            node=TextNode(
+                text=f"{self.LONG_HEADER}\n---\n{BODY}",
+                metadata={"title": "Title", "chunk_body": BODY},
+            ),
+            score=1.0,
+        )
+        base = Mock(spec=BaseRetriever)
+        base.retrieve.return_value = [node]
+        return SelfCorrectingRetriever(base, llm, max_retries=1), node
+
+    def test_grading_reads_the_body_not_the_header(self):
+        llm = Mock()
+        llm.complete.return_value = SimpleNamespace(text="CORRECT")
+        retriever, node = self._retriever(llm)
+
+        retriever.grade_relevance("dopamine", [node])
+
+        prompt = llm.complete.call_args.args[0]
+        assert BODY in prompt
+        assert "item level summary" not in prompt
+
+    def test_refinement_sample_reads_the_body_not_the_header(self):
+        llm = Mock()
+        llm.complete.return_value = SimpleNamespace(text="INCORRECT")
+        retriever, _node = self._retriever(llm)
+        refine = Mock(return_value="better query")
+        retriever.refine_query = refine
+
+        retriever.retrieve(QueryBundle(query_str="dopamine"))
+
+        assert refine.call_args.args[1] == f"Title: {BODY}"
+
+    def test_node_without_a_chunk_body_still_grades_on_its_text(self):
+        llm = Mock()
+        llm.complete.return_value = SimpleNamespace(text="CORRECT")
+        retriever, _node = self._retriever(llm)
+        plain = NodeWithScore(node=TextNode(text=BODY, metadata={"title": "Title"}), score=1.0)
+
+        retriever.grade_relevance("dopamine", [plain])
+
+        assert BODY in llm.complete.call_args.args[0]
+
+
+class TestChunkContext:
+    def test_table_without_new_columns_still_returns_plain_nodes(self, make_retriever):
+        retriever = make_retriever([{}])
+
+        assert retriever.validate() is True
+        nodes = _retrieve(retriever)
+
+        assert [n.node.text for n in nodes] == [BODY]
+        assert "chunk_body" not in nodes[0].node.metadata
+
+    def test_context_is_prepended_and_body_kept_for_display(self, make_retriever):
+        nodes = _retrieve(make_retriever([{"context": HEADER}]))
+
+        assert nodes[0].node.text == f"{HEADER}\n---\n{BODY}"
+        assert nodes[0].node.metadata["chunk_body"] == BODY
+
+    def test_empty_or_null_context_leaves_text_unchanged(self, make_retriever):
+        rows = [
+            {"item_id": "empty", "context": ""},
+            {"item_id": "null", "context": None},
+            {"item_id": "set", "context": HEADER},
+        ]
+
+        nodes = {n.node.metadata["file_path"]: n.node for n in _retrieve(make_retriever(rows))}
+
+        for item_id in ("empty", "null"):
+            assert nodes[item_id].text == BODY
+            assert "chunk_body" not in nodes[item_id].metadata
+        assert nodes["set"].text.startswith(HEADER)
+
+    @pytest.mark.parametrize("mode", [MetadataMode.LLM, MetadataMode.EMBED])
+    def test_chunk_is_not_sent_twice(self, make_retriever, mode):
+        node = _retrieve(make_retriever([{"context": HEADER}]))[0].node
+
+        content = node.get_content(metadata_mode=mode)
+
+        assert content.count(BODY) == 1
+        assert HEADER in content
+        assert "chunk_body" not in content
+
+    def test_scope_and_item_identity_hold_on_the_new_schema(self, make_retriever):
+        rows = [
+            {"item_id": "mine", "context": HEADER},
+            {"item_id": "theirs", "context": HEADER, "vector": [0.9, 0.1, 0.0]},
+        ]
+        retriever = make_retriever(rows)
+        retriever.allowed_item_ids = {"mine"}
+
+        nodes = _retrieve(retriever)
+
+        assert [n.node.metadata["file_path"] for n in nodes] == ["mine"]
+
+
+def _headed_node(item_id="item-1", header=HEADER, body=BODY):
+    return TextNode(
+        id_=f"saved_items:{item_id}:0",
+        text=f"{header}\n---\n{body}",
+        metadata={"file_path": item_id, "chunk_body": body, "file_name": "f", "title": "T"},
+    )
+
+
+class TestSourceExcerpt:
+    def test_prefers_chunk_body(self):
+        assert _source_excerpt(_headed_node()) == BODY
+
+    def test_falls_back_to_original_text_then_text(self):
+        assert _source_excerpt(TextNode(text="[1] x", metadata={"_original_text": "x"})) == "x"
+        assert _source_excerpt(TextNode(text="plain")) == "plain"
+
+    def test_accepts_node_with_score_and_truncates(self):
+        node = NodeWithScore(node=TextNode(text="a" * 1501), score=1.0)
+
+        assert _source_excerpt(node) == "a" * 1500 + "..."
+
+    def test_source_numbering_keeps_header_for_llm_and_body_for_display(self):
+        node = NodeWithScore(node=_headed_node(), score=1.0)
+
+        SourceNumberingPostprocessor().postprocess_nodes([node])
+
+        assert HEADER in node.node.text
+        assert _source_excerpt(node) == BODY
+
+    def test_format_sources_shows_body(self):
+        sources = UltraRAG._format_sources(None, [NodeWithScore(node=_headed_node(), score=1.0)])
+
+        assert sources[0]["excerpt"] == BODY
+
+
+class _StubRetriever(BaseRetriever):
+    def __init__(self, nodes):
+        self._stub_nodes = nodes
+        super().__init__()
+
+    def _retrieve(self, query_bundle):
+        return self._stub_nodes
+
+
+class TestQueryFederated:
+    def test_llm_sees_the_header_and_sources_show_the_body(self, monkeypatch):
+        # MockLLM echoes the prompt, so the answer shows what reached the synthesiser.
+        monkeypatch.setattr(Settings, "_llm", MockLLM())
+        source = IndexSource(
+            name="saved_items",
+            source_type="saved_items",
+            weight=1.0,
+            custom_retriever=_StubRetriever([NodeWithScore(node=_headed_node(), score=0.9)]),
+        )
+        rag = object.__new__(UltraRAG)
+        rag.config = SimpleNamespace(retrieval=RetrievalConfig(use_self_correction=False))
+        rag.federated_engine = FederatedQueryEngine([source], rag.config, use_cache=False)
+
+        result = rag.query_federated("q")
+
+        assert HEADER in result["answer"]
+        assert result["answer"].count(BODY) == 1
+        assert [s["excerpt"] for s in result["sources"]] == [BODY]
+
+
+class TestFederatedDedupe:
+    def test_identical_bodies_in_two_items_dedupe_despite_different_headers(self):
+        nodes = [
+            NodeWithScore(node=_headed_node("item-1", header="[a] One"), score=0.9),
+            NodeWithScore(node=_headed_node("item-2", header="[b] Two"), score=0.8),
+        ]
+        source = IndexSource(
+            name="saved_items",
+            source_type="saved_items",
+            weight=1.0,
+            custom_retriever=_StubRetriever(nodes),
+        )
+        config = SimpleNamespace(retrieval=RetrievalConfig())
+
+        merged = FederatedRetriever([source], config, parallel=False).retrieve(
+            QueryBundle(query_str="dopamine")
+        )
+
+        assert [n.node.metadata["file_path"] for n in merged] == ["item-1"]
+
+    def test_same_item_dedupe_key_ignores_the_header(self):
+        first = NodeWithScore(node=_headed_node(header="[a] One"), score=0.9)
+        second = NodeWithScore(node=_headed_node(header="[a] Refreshed"), score=0.8)
+
+        assert FederatedRetriever._content_dedupe_key(first) == (
+            FederatedRetriever._content_dedupe_key(second)
+        )
+
+
+class TestEmbeddingModelCheck:
+    @pytest.mark.parametrize(
+        ("table_model", "configured"),
+        [
+            ("voyage-3.5-lite", "voyage-3.5-lite"),
+            ("voyage-4-lite", "voyage-4-large"),
+            ("voyage-4", "voyage-4-lite"),
+            ("", "voyage-4-large"),
+        ],
+    )
+    def test_compatible_model_is_silent(self, make_retriever, caplog, table_model, configured):
+        retriever = make_retriever(
+            [{"embedding_model": table_model}], embedding_model=configured, strict_model_check=True
+        )
+
+        with caplog.at_level(logging.WARNING, logger="saved_items_retriever"):
+            assert retriever.validate() is True
+
+        assert "embedding model" not in caplog.text
+
+    def test_mismatch_warns_but_keeps_the_source(self, make_retriever, caplog):
+        retriever = make_retriever(
+            [{"embedding_model": "voyage-3.5-lite"}], embedding_model="voyage-4-large"
+        )
+
+        with caplog.at_level(logging.WARNING, logger="saved_items_retriever"):
+            assert retriever.validate() is True
+
+        assert "voyage-3.5-lite" in caplog.text
+        assert [n.node.text for n in _retrieve(retriever)] == [BODY]
+
+    def test_strict_mismatch_disables_the_source(self, make_retriever, caplog):
+        retriever = make_retriever(
+            [{"embedding_model": "voyage-3.5-lite"}],
+            embedding_model="voyage-4-large",
+            strict_model_check=True,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="saved_items_retriever"):
+            assert retriever.validate() is False
+
+        assert "voyage-3.5-lite" in caplog.text
+        assert _retrieve(retriever) == []
+
+    def test_strict_mismatch_disables_even_when_the_dim_check_cannot_run(
+        self, make_retriever, monkeypatch
+    ):
+        retriever = make_retriever(
+            [{"embedding_model": "voyage-3.5-lite"}],
+            embedding_model="voyage-4-large",
+            strict_model_check=True,
+        )
+        broken = Mock(get_query_embedding=Mock(side_effect=RuntimeError("no network")))
+        monkeypatch.setattr("saved_items_retriever.Settings", SimpleNamespace(embed_model=broken))
+
+        assert retriever.validate() is False
+
+    def test_table_without_the_column_is_fine_even_when_strict(self, make_retriever, caplog):
+        retriever = make_retriever([{}], embedding_model="voyage-4-large", strict_model_check=True)
+
+        with caplog.at_level(logging.WARNING, logger="saved_items_retriever"):
+            assert retriever.validate() is True
+
+        assert "embedding model" not in caplog.text
+
+    def test_strict_setting_comes_from_env_and_defaults_off(self, monkeypatch, temp_vault):
+        assert _config_from_env(monkeypatch, temp_vault).strict_model_check is False
+        config = _config_from_env(monkeypatch, temp_vault, SAVED_ITEMS_STRICT_MODEL_CHECK="true")
+        assert config.strict_model_check is True
+
+    def test_pipeline_passes_the_configured_model(self, monkeypatch):
+        built = {}
+
+        def fake_retriever(config, top_k, embedding_model):
+            built["embedding_model"] = embedding_model
+            return Mock(validate=Mock(return_value=True))
+
+        monkeypatch.setattr("saved_items_retriever.SavedItemsRetriever", fake_retriever)
+        rag = SimpleNamespace(
+            config=SimpleNamespace(
+                saved_items=SavedItemsConfig(enabled=True),
+                embedding=EmbeddingConfig(model="voyage-4-lite"),
+                retrieval=RetrievalConfig(),
+            ),
+            index=None,
+        )
+
+        UltraRAG._auto_load_saved_items(rag)
+
+        assert built["embedding_model"] == "voyage-4-lite"

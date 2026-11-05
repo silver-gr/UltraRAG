@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Saved-items chunk context**: an optional `context` column is prepended to retrieved text, while excerpts and dedupe use the chunk body; `SAVED_ITEMS_STRICT_MODEL_CHECK` (default `false`) disables the source when an optional `embedding_model` column disagrees with `EMBEDDING_MODEL`, which otherwise only warns.
 - **Default embedding model `voyage-4-large`** (was `voyage-4-lite`, whose free tier is used
   up). All Voyage 4 models share one embedding space, so indexes built with `voyage-4-lite`
   stay valid: queries and newly indexed documents use `voyage-4-large`, no re-index needed.

@@ -367,7 +367,8 @@ class FederatedRetriever(BaseRetriever):
         content_hashes: set = set()
         content_deduped: List[NodeWithScore] = []
         for node in unique_nodes:
-            text = node.node.get_content().strip().lower()
+            # Headers differ per item, so hash the body or identical chunks would survive
+            text = (node.node.metadata.get("chunk_body") or node.node.get_content()).strip().lower()
             content_hash = hashlib.md5(text.encode("utf-8")).hexdigest()
             if content_hash not in content_hashes:
                 content_hashes.add(content_hash)
@@ -437,7 +438,7 @@ class FederatedRetriever(BaseRetriever):
             or md.get("book_uid")
             or "unknown"
         )
-        text = (node.text or "").strip().lower()
+        text = (md.get("chunk_body") or node.text or "").strip().lower()
         text = re.sub(r"\s+", " ", text)
         if not text:
             return ""

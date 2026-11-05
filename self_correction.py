@@ -83,7 +83,7 @@ class SelfCorrectingRetriever(BaseRetriever):
         context_chunks = []
         for idx, node in enumerate(nodes[:3], 1):
             # Truncate each chunk to 500 chars
-            chunk_text = node.node.text[:500]
+            chunk_text = (node.metadata.get('chunk_body') or node.node.text)[:500]
             title = node.metadata.get('title', 'Unknown')
             context_chunks.append(f"[Document {idx}: {title}]\n{chunk_text}")
 
@@ -225,7 +225,8 @@ Respond with ONLY the new query text, nothing else:"""
             if attempt < self.max_retries and grade != RelevanceGrade.CORRECT:
                 # Build context from failed retrieval
                 context_sample = "\n".join([
-                    f"{n.metadata.get('title', 'Unknown')}: {n.node.text[:200]}"
+                    f"{n.metadata.get('title', 'Unknown')}: "
+                    f"{(n.metadata.get('chunk_body') or n.node.text)[:200]}"
                     for n in nodes[:2]
                 ])
 

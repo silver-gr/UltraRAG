@@ -328,6 +328,7 @@ class SavedItemsConfig(BaseModel):
     table_name: str = Field(default="saved_items")
     min_quality_filter: bool = Field(default=True)  # Hide unscored items, like x3lixi's unscoped search
     where: Optional[str] = Field(default=None)  # Extra LanceDB predicate, AND-ed with the filter above
+    strict_model_check: bool = Field(default=False)  # Disable the source when the table's embedding model differs
 
     @field_validator('weight')
     @classmethod
@@ -645,6 +646,7 @@ def load_config() -> RAGConfig:
             table_name=os.getenv("SAVED_ITEMS_TABLE_NAME", "saved_items"),
             min_quality_filter=os.getenv("SAVED_ITEMS_MIN_QUALITY_FILTER", "true").lower() == "true",
             where=os.getenv("SAVED_ITEMS_WHERE") or None,
+            strict_model_check=os.getenv("SAVED_ITEMS_STRICT_MODEL_CHECK", "false").lower() == "true",
         ),
         raptor=RaptorConfig(
             enabled=os.getenv("ENABLE_RAPTOR", "false").lower() == "true",

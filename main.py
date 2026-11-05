@@ -110,6 +110,13 @@ class ResearchResult:
 # Module-level synthesis helpers
 # ============================================
 
+def _source_excerpt(node):
+    """Excerpt for display: the chunk itself, without retrieval header or [N] prefix."""
+    md = node.metadata
+    text = md.get('chunk_body') or md.get('_original_text') or node.text
+    return text[:1500] + "..." if len(text) > 1500 else text
+
+
 def _build_synthesis_context(nodes, start_index=1):
     """Build numbered context string for synthesis prompt."""
     context_parts = []
@@ -572,6 +579,7 @@ class UltraRAG:
             retriever = SavedItemsRetriever(
                 config=self.config.saved_items,
                 top_k=self.config.retrieval.federated_top_k_per_source,
+                embedding_model=self.config.embedding.model,
             )
             if retriever.validate():
                 self.saved_items_retriever = retriever
@@ -579,7 +587,7 @@ class UltraRAG:
                     self._setup_federated_engine()
                 print("✅ TheSource (saved items) loaded")
             else:
-                print("⚠️  TheSource table not found or dim mismatch — saved items disabled")
+                print("⚠️  TheSource table not found or dim/model mismatch — saved items disabled")
         except Exception as e:
             logger.warning(f"Failed to load saved items: {e}")
 
@@ -870,14 +878,12 @@ class UltraRAG:
         nodes_to_format = source_nodes if max_sources is None else source_nodes[:max_sources]
 
         for idx, node in enumerate(nodes_to_format, 1):
-            # Use original text (without [N] prefix) for display excerpts
-            display_text = node.metadata.get('_original_text', node.text)
             sources.append({
                 'rank': idx,
                 'title': node.metadata.get('title', 'Unknown'),
                 'file': node.metadata.get('file_name', 'Unknown'),
                 'score': node.score,
-                'excerpt': display_text[:1500] + "..." if len(display_text) > 1500 else display_text,
+                'excerpt': _source_excerpt(node),
                 'source_type': node.metadata.get('source_type', 'vault'),
                 'retrieval_source': node.metadata.get('retrieval_source', 'vault')
             })
@@ -1738,7 +1744,7 @@ class UltraRAG:
                         'title': title,
                         'file': metadata.get('file_path', metadata.get('file_name', 'Unknown')),
                         'score': node.score if hasattr(node, 'score') else 0.0,
-                        'excerpt': node_obj.text[:1500] + "..." if len(node_obj.text) > 1500 else node_obj.text,
+                        'excerpt': _source_excerpt(node_obj),
                         'source_type': stype,
                         'url': metadata.get('url'),
                         'domain': metadata.get('domain'),
@@ -2080,7 +2086,7 @@ class UltraRAG:
                         'file': md.get('file_path', 'Unknown'),
                         'file_path': md.get('file_path', 'Unknown'),
                         'score': node.score or 0.0,
-                        'excerpt': node.node.text[:1500] + "..." if len(node.node.text) > 1500 else node.node.text,
+                        'excerpt': _source_excerpt(node.node),
                         'source_type': stype,
                         'url': md.get('url'),
                         'domain': md.get('domain'),
@@ -2216,7 +2222,7 @@ class UltraRAG:
                             path=None,
                             url=node.node.metadata.get('url', ''),
                             relevance=weighted_score,
-                            snippet=node.node.text[:1500] + "..." if len(node.node.text) > 1500 else node.node.text,
+                            snippet=_source_excerpt(node.node),
                             title=node.node.metadata.get('title', 'Web Result')
                         ))
                         web_count += 1
@@ -2531,11 +2537,11 @@ Answer:"""
                 sources = []
                 for i, node in enumerate(nodes_for_synthesis, 1):
                     if hasattr(node, 'node'):
-                        text = node.node.text
+                        excerpt = _source_excerpt(node.node)
                         metadata = node.node.metadata
                         score = node.score or 0.0
                     else:
-                        text = node.text
+                        excerpt = _source_excerpt(node)
                         metadata = node.metadata
                         score = 0.0
 
@@ -2544,7 +2550,7 @@ Answer:"""
                         'title': metadata.get('title', 'Summary'),
                         'file': metadata.get('file_path', 'RAPTOR Summary'),
                         'score': score,
-                        'excerpt': text[:1500] + "..." if len(text) > 1500 else text,
+                        'excerpt': excerpt,
                         'source_type': 'raptor'
                     })
                 result['sources'] = sources
