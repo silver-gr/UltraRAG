@@ -1712,6 +1712,7 @@ class UltraRAG:
                 st = node_obj.metadata.get('source_type', 'vault')
                 if st in source_summary["by_type"]:
                     source_summary["by_type"][st] += 1
+            logger.info(f"Federated final per-source counts: {source_summary['by_type']}")
 
             if return_sources:
                 # Build sources list matching synthesis nodes (citations will match)

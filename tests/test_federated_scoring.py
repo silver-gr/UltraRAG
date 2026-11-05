@@ -18,6 +18,7 @@ from embeddings import TrackedVoyageReranker
 from eval_harness import RetrievalProbe
 from federated_query import FederatedQueryEngine, FederatedRetriever, IndexSource
 from main import UltraRAG
+from query_engine import HybridQueryEngine, RAGQueryEngine, RerankScoreThreshold
 from research_mode import ResearchRetriever
 
 pytestmark = pytest.mark.unit
@@ -161,6 +162,15 @@ class TestRerankerWiring:
         result = rag.query_federated("q", max_sources=max_sources)
 
         assert len(result["sources"]) == expected
+
+    def test_final_source_mix_is_logged(self, monkeypatch, caplog):
+        rag = _federated_rag(monkeypatch, RecordingReranker(top_n=2))
+
+        with caplog.at_level(logging.INFO, logger="main"):
+            rag.query_federated("q")
+
+        assert "Federated final per-source counts" in caplog.text
+        assert "'vault': 2" in caplog.text
 
     def test_eval_probe_measures_the_production_path(self, monkeypatch):
         reranker = RecordingReranker()
@@ -408,6 +418,46 @@ class TestQuotaFallbackThreshold:
         tracker.check_rerank_quota.return_value = (True, "")
 
         assert [n.score for n in engine.retrieve("q")] == [0.9]
+
+    def test_a_failed_rerank_call_falls_back_instead_of_failing_the_query(
+        self, monkeypatch, caplog, tracked
+    ):
+        _, tracker = tracked
+        tracker.check_rerank_quota.return_value = (True, "")
+        broken = Mock(top_n=5)
+        broken.postprocess_nodes.side_effect = RuntimeError("503 from Voyage")
+        reranker = TrackedVoyageReranker(broken, "rerank-3")
+        engine = _federated_rag(monkeypatch, reranker, rerank_score_threshold=0.1).federated_engine
+
+        with caplog.at_level(logging.ERROR, logger="embeddings"):
+            nodes = engine.retrieve("q")
+
+        assert len(nodes) == 5, "the threshold must not remove the unranked nodes"
+        assert reranker.fell_back is True
+        assert "Rerank failed" in caplog.text
+        tracker.record_rerank_usage.assert_not_called()
+
+    @pytest.mark.parametrize("engine_class", [RAGQueryEngine, HybridQueryEngine])
+    def test_vault_engines_use_the_guarded_threshold(self, monkeypatch, engine_class):
+        monkeypatch.setattr(Settings, "_llm", MockLLM())
+        reranker = StubReranker()
+        built = {}
+
+        def capture(**kwargs):
+            built.update(kwargs)
+            return Mock()
+
+        monkeypatch.setattr("query_engine.RetrieverQueryEngine", capture)
+        monkeypatch.setattr("query_engine.VectorIndexRetriever", Mock())
+        config = SimpleNamespace(
+            retrieval=RetrievalConfig(rerank_score_threshold=0.1, use_self_correction=False),
+        )
+
+        engine_class(index=Mock(), config=config, reranker=reranker, use_cache=False)
+
+        thresholds = [p for p in built["node_postprocessors"] if isinstance(p, RerankScoreThreshold)]
+        assert len(thresholds) == 1
+        assert thresholds[0].reranker is reranker
 
     def test_research_path_has_the_same_guard(self, tracked):
         reranker, tracker = tracked

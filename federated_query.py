@@ -401,7 +401,7 @@ class FederatedRetriever(BaseRetriever):
             f"{len(diversified_nodes)} diversified -> {len(result_nodes)} final"
         )
         per_source = Counter(n.node.metadata.get('retrieval_source') for n in result_nodes)
-        logger.debug(f"Federated final per-source counts: {dict(per_source)}")
+        logger.debug(f"Federated candidate per-source counts: {dict(per_source)}")
 
         if self._rerank_steps and result_nodes:
             self.rerank_calls += 1

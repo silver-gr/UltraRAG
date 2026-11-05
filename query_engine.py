@@ -224,8 +224,8 @@ from collections import OrderedDict
 class RerankScoreThreshold(SimilarityPostprocessor):
     """Post-rerank cutoff that steps aside when the reranker returned unranked nodes.
 
-    TrackedVoyageReranker keeps the original order when the quota is exceeded. Those nodes still
-    carry pre-rerank scores, so the cutoff would silently remove all of them.
+    TrackedVoyageReranker keeps the original order when the quota is exceeded or the call fails.
+    Those nodes still carry pre-rerank scores, so the cutoff would silently remove all of them.
     """
 
     reranker: Any = None

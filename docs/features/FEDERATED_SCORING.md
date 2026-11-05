@@ -39,12 +39,16 @@ The configured reranker runs on the merged candidates on every federated path:
 - `eval_harness.RetrievalProbe` calls the same `retrieve_candidates` and `rerank_candidates` steps
   as `FederatedQueryEngine.retrieve`, so golden-set scores measure this path.
 
-Vault-only research runs no reranker.
+`UltraRAG.query_research` with only the vault selected runs no reranker. `retrieval.research` always
+builds a `FederatedRetriever`, so it reranks even with one source.
+
+When the quota is exceeded or a rerank call fails, `TrackedVoyageReranker` logs it and returns the
+nodes in merge order, and `RERANK_SCORE_THRESHOLD` is ignored for that call.
 
 ## Reading scores downstream
 
-`node.score` is the reranker's score after these paths, and the merge score only when no real
-reranker is configured.
+`node.score` is the reranker's score after these paths. It is the merge score when no real reranker
+is configured, or when the reranker fell back.
 
 The source's own score stays in `node.metadata["native_score"]`, for debugging. It is excluded from
 the text sent to the reranker and the LLM. Native scores still mix scales, so research mode skips its
@@ -53,10 +57,12 @@ score floor for federated results. Information gain and query similarity still s
 Without a real reranker, the federated engine applies no `SIMILARITY_THRESHOLD`, and it ignores
 `get_reranker`'s cosine-cutoff fallback: on merge scores either would remove every result.
 
-To see the per-source mix of the final list, enable debug logging for `federated_query`:
+The logs show the per-source mix at both stages. `federated_query` logs the candidates at debug
+level, and `main` logs the nodes sent to the LLM at info level:
 
 ```
-Federated final per-source counts: {'vault': 38, 'books': 34, 'conversations': 30, 'saved_items': 18}
+Federated candidate per-source counts: {'vault': 38, 'books': 34, 'conversations': 30, 'saved_items': 18}
+Federated final per-source counts: {'vault': 6, 'conversations': 0, 'books': 0, 'saved_items': 14}
 ```
 
 ## Saved-items filter
@@ -68,7 +74,8 @@ Federated final per-source counts: {'vault': 38, 'books': 34, 'conversations': 3
 | `SAVED_ITEMS_MIN_QUALITY_FILTER` | `true` | Keep rows where `usefulness_score > 0 OR relevance_score > 0`, the rule x3lixi's unscoped search uses |
 | `SAVED_ITEMS_WHERE` | unset | Extra LanceDB SQL predicate, AND-ed with the filter above |
 
-The active predicate is logged once when the table is opened. Items that x3lixi no longer considers
+The unscoped predicate is logged once when the table is opened, and each scoped query logs its item
+count. Items that x3lixi no longer considers
 eligible (dead links, rejected, archived) can't be detected from these columns. The x3lixi side has
 to remove them from the table.
 

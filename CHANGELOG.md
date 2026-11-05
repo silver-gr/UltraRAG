@@ -48,9 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Federated retrieval silently dropped slow sources**: each source got a 30-second timeout, waited
   on in order, so a query with a cold HyDE cache often lost the vault, and sometimes the books too.
   The timeout saved no time, because the thread pool waits for every source anyway. It is gone.
-- **`RERANK_SCORE_THRESHOLD` removed every result when the Voyage quota ran out**: the reranker
-  falls back to unranked nodes that still carry pre-rerank scores. The threshold is now ignored for
-  that call and a warning is logged.
+- **A failed rerank call failed the whole query**: `TrackedVoyageReranker` now returns unranked nodes
+  and logs an error, as it already did for an exceeded quota. A permanent error such as a bad key
+  therefore shows up as an error in the log, with results in merge order.
+- **`RERANK_SCORE_THRESHOLD` removed every result when the reranker fell back**: unranked nodes still
+  carry pre-rerank scores. The threshold is now ignored for that call and a warning is logged.
 - **Agent CLI returned "Empty Response"** (`python -m cli query/research`, broken since
   1.6.0). The stateless `retrieval.py` engines were built without a reranker or BM25 nodes,
   so the 0.3 cosine cutoff ran on rank-fused scores and removed every result. They now get

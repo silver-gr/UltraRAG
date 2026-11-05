@@ -126,10 +126,12 @@ class TestQualityPredicate:
 
 
 class TestViewerScope:
-    def test_scope_prefilters_by_item_id_and_skips_quality_filter(self, run_query):
-        query, nodes = run_query(SavedItemsConfig(), allowed_item_ids={"item-2", "item-1"})
+    def test_scope_prefilters_by_item_id_and_skips_quality_filter(self, run_query, caplog):
+        with caplog.at_level(logging.INFO, logger="saved_items_retriever"):
+            query, nodes = run_query(SavedItemsConfig(), allowed_item_ids={"item-2", "item-1"})
 
         assert query.where_calls == [("item_id IN ('item-1', 'item-2')", True)]
+        assert "scoped to 2 items" in caplog.text
         assert nodes[0].node.metadata["file_path"] == "item-1"
 
     def test_unscoped_query_keeps_quality_filter(self, run_query):

@@ -141,14 +141,22 @@ class TrackedVoyageReranker:
 
         estimated_tokens = self._tracker.estimate_tokens(all_texts)
 
+        # Don't fail the query over the reranker, just return original order
+        unranked = nodes[:self._base.top_n] if hasattr(self._base, 'top_n') else nodes
+
         can_proceed, msg = self._tracker.check_rerank_quota(estimated_tokens)
         self.fell_back = not can_proceed
         if not can_proceed:
             logger.warning(f"Rerank quota exceeded, returning unranked results: {msg}")
-            # Don't fail, just return original order
-            return nodes[:self._base.top_n] if hasattr(self._base, 'top_n') else nodes
+            return unranked
 
-        result = self._base.postprocess_nodes(nodes, query_bundle, **kwargs)
+        try:
+            result = self._base.postprocess_nodes(nodes, query_bundle, **kwargs)
+        except Exception as e:
+            logger.error(f"Rerank failed, returning unranked results: {e}")
+            self.fell_back = True
+            return unranked
+
         self._tracker.record_rerank_usage(estimated_tokens, self._model_name)
         return result
 

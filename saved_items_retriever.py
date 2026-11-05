@@ -144,9 +144,11 @@ class SavedItemsRetriever(BaseRetriever):
         if not self.validate():
             return []
 
-        # An empty scope matches nothing, and IN () is not valid SQL
-        if self.allowed_item_ids is not None and not self.allowed_item_ids:
-            return []
+        if self.allowed_item_ids is not None:
+            logger.info(f"saved_items query scoped to {len(self.allowed_item_ids)} items")
+            # An empty scope matches nothing, and IN () is not valid SQL
+            if not self.allowed_item_ids:
+                return []
 
         try:
             # Embed query using the shared embedding model
