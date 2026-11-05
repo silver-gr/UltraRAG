@@ -20,8 +20,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   up). All Voyage 4 models share one embedding space, so indexes built with `voyage-4-lite`
   stay valid: queries and newly indexed documents use `voyage-4-large`, no re-index needed.
 - **Default reranker `rerank-3`** (was `rerank-2.5`): same API, price and score calibration.
+- **Saved-items quality filter**: `SavedItemsRetriever` now pre-filters with
+  `usefulness_score > 0 OR relevance_score > 0`, matching x3lixi's unscoped search. New env
+  vars: `SAVED_ITEMS_MIN_QUALITY_FILTER` (default `true`) and `SAVED_ITEMS_WHERE` (extra
+  predicate). The filter also applies to x3lixi's per-user scoped queries, which x3lixi's own
+  search exempts; see `docs/features/FEDERATED_SCORING.md`.
+- **Federated engine without a real reranker** no longer applies `SIMILARITY_THRESHOLD` or
+  `get_reranker`'s cosine-cutoff fallback: merged scores are rank-based, so a cosine cutoff would
+  remove every result.
+- **Federated research** skips its score floor: sources mix score scales, so no single floor
+  applies. Information gain and query similarity still stop research, which can mean one more
+  iteration for federated research runs.
 
 ### Fixed
+- **Federated merge compared incomparable scores**: saved items (cosine, 0.4-0.9) outranked
+  every vault, book and conversation chunk (RRF, ~0.02) in the pre-rerank cut to
+  `FEDERATED_FINAL_TOP_K`. Sources now merge by rank and share the cut in proportion to their
+  weights. See `docs/features/FEDERATED_SCORING.md`.
 - **Agent CLI returned "Empty Response"** (`python -m cli query/research`, broken since
   1.6.0). The stateless `retrieval.py` engines were built without a reranker or BM25 nodes,
   so the 0.3 cosine cutoff ran on rank-fused scores and removed every result. They now get

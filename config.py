@@ -326,6 +326,8 @@ class SavedItemsConfig(BaseModel):
     weight: float = Field(default=0.5)
     shared_lancedb_path: Path = Field(default=Path.home() / "Projects" / "shared-data" / "lancedb")
     table_name: str = Field(default="saved_items")
+    min_quality_filter: bool = Field(default=True)  # Hide unscored items, like x3lixi's unscoped search
+    where: Optional[str] = Field(default=None)  # Extra LanceDB predicate, AND-ed with the filter above
 
     @field_validator('weight')
     @classmethod
@@ -641,6 +643,8 @@ def load_config() -> RAGConfig:
             weight=float(os.getenv("SAVED_ITEMS_WEIGHT", "0.5")),
             shared_lancedb_path=Path(os.getenv("SAVED_ITEMS_LANCEDB_PATH", str(Path.home() / "Projects" / "shared-data" / "lancedb"))),
             table_name=os.getenv("SAVED_ITEMS_TABLE_NAME", "saved_items"),
+            min_quality_filter=os.getenv("SAVED_ITEMS_MIN_QUALITY_FILTER", "true").lower() == "true",
+            where=os.getenv("SAVED_ITEMS_WHERE") or None,
         ),
         raptor=RaptorConfig(
             enabled=os.getenv("ENABLE_RAPTOR", "false").lower() == "true",

@@ -2,7 +2,7 @@
 import logging
 import hashlib
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import List, Optional, Dict, Any, Literal
 from dataclasses import dataclass
 import asyncio
@@ -111,7 +111,7 @@ class IndexSource:
     name: str
     source_type: Literal["vault", "conversations", "web", "saved_items", "books"]
     index: Optional[VectorStoreIndex] = None
-    weight: float = 1.0  # Score multiplier for this source
+    weight: float = 1.0  # This source's share of the federated merge, relative to the others
     nodes: Optional[List] = None  # For BM25 retriever
     wikilink_graph: Optional[Dict[str, List[str]]] = None
     custom_retriever: Optional[BaseRetriever] = None  # For flat-schema sources (e.g. saved_items)
@@ -264,20 +264,28 @@ class FederatedRetriever(BaseRetriever):
             retriever = self.retrievers[source.name]
             nodes = retriever.retrieve(query_bundle)
 
-            # Apply source weight and tag
+            # Native scores are not comparable across sources (RRF ~0.02, cosine ~0.7), so the
+            # merge sorts on 1/(k + rank/weight): a rank-r node of a weight-0.5 source ties with
+            # a rank-2r node of a weight-1.0 source, and each source's share of the merged list
+            # follows its weight. Merge scores say nothing about absolute relevance.
+            k = self.config.retrieval.rrf_k
+            nodes = sorted(nodes, key=lambda n: n.score or 0.0, reverse=True)
             weighted_nodes = []
-            for node in nodes:
+            for rank, node in enumerate(nodes, start=1):
                 # Tag with source info
                 node.node.metadata['retrieval_source'] = source.name
                 node.node.metadata['source_type'] = source.source_type
+                node.node.metadata['native_score'] = node.score
 
-                # Apply weight
-                original_score = node.score or 0.0
-                weighted_score = original_score * source.weight
+                # Reranker and LLM text is built from metadata; node objects can be reused
+                for excluded in (node.node.excluded_embed_metadata_keys, node.node.excluded_llm_metadata_keys):
+                    if 'native_score' not in excluded:
+                        excluded.append('native_score')
 
                 weighted_nodes.append(NodeWithScore(
                     node=node.node,
-                    score=weighted_score
+                    # Same value as 1/(k + rank/weight), but weight 0 gives 0 instead of raising
+                    score=source.weight / (k * source.weight + rank)
                 ))
 
             logger.debug(f"Retrieved {len(weighted_nodes)} nodes from {source.name}")
@@ -370,6 +378,8 @@ class FederatedRetriever(BaseRetriever):
             f"{len(unique_nodes)} unique -> {len(content_deduped)} content-deduped -> "
             f"{len(diversified_nodes)} diversified -> {len(result_nodes)} final"
         )
+        per_source = Counter(n.node.metadata.get('retrieval_source') for n in result_nodes)
+        logger.debug(f"Federated final per-source counts: {dict(per_source)}")
 
         return result_nodes
 
@@ -499,20 +509,15 @@ class FederatedQueryEngine:
             )
             logger.info("Metadata filter enabled for federated engine")
 
-        if self.reranker:
-            node_postprocessors.append(self.reranker)
+        # No similarity cutoff without a real reranker: merged scores are rank-based, so a cosine
+        # threshold would remove every node. That includes get_reranker's cosine-cutoff fallback.
+        reranker = None if isinstance(self.reranker, SimilarityPostprocessor) else self.reranker
+        if reranker:
+            node_postprocessors.append(reranker)
             logger.info("Reranker enabled for federated engine")
 
-        # Similarity filter (only if no reranker)
-        if self.config.retrieval.similarity_threshold > 0 and not self.reranker:
-            node_postprocessors.append(
-                SimilarityPostprocessor(
-                    similarity_cutoff=self.config.retrieval.similarity_threshold
-                )
-            )
-
         # Post-rerank score threshold (separate scale from cosine similarity)
-        if self.reranker and self.config.retrieval.rerank_score_threshold > 0:
+        if reranker and self.config.retrieval.rerank_score_threshold > 0:
             node_postprocessors.append(
                 SimilarityPostprocessor(
                     similarity_cutoff=self.config.retrieval.rerank_score_threshold

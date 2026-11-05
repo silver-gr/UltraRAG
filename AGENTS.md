@@ -90,10 +90,12 @@ stacks - check and test both.
     grading; `SelfRAGValidator` post-generation hallucination check).
 - **Federated:** `federated_query.py` `FederatedQueryEngine` queries sources in parallel:
   `vault`, `conversations`, `books`, `saved_items`, `web`.
-  - Each node's score is multiplied by its source weight, then results are deduplicated
-    by node id and content and sorted.
-  - RRF is used within a source, for hybrid and multi-query fusion. It is never applied
-    across sources.
+  - Each node is rescored by rank within its source as `1/(k + rank/weight)`, because native
+    scores are not comparable across sources. Results are then deduplicated by node id and
+    content and sorted. The source's own score stays in `metadata["native_score"]`
+    (`docs/features/FEDERATED_SCORING.md`).
+  - RRF is used within a source, for hybrid and multi-query fusion. Across sources only the
+    rank-based formula above applies.
 - **Research:** `research_mode.py` `ResearchRetriever` loops retrieval -> LLM gap analysis
   -> refined sub-queries.
   - It stops at `RESEARCH_CONFIDENCE_THRESHOLD`, or when information gain (new unique
@@ -302,7 +304,7 @@ Code defaults (your `.env` may override them):
 | | `RESEARCH_MAX_SUBQUERIES`, `RESEARCH_GAP_ANALYSIS_TOP_N`, `RESEARCH_MAX_SYNTHESIS_SOURCES` | 3, 40, 0 |
 | Conversations | `CONVERSATIONS_ENABLED`, `CONVERSATIONS_PATH`, `CONVERSATIONS_WEIGHT` | false, unset, 0.8 |
 | Books | `BOOKS_ENABLED`, `BOOKS_PATH`, `CALIBRE_DB_PATH`, `BOOKS_WEIGHT` | false, unset, unset, 0.9 |
-| Saved items | `SAVED_ITEMS_ENABLED`, `SAVED_ITEMS_LANCEDB_PATH`, `SAVED_ITEMS_WEIGHT` | false, `~/Projects/shared-data/lancedb`, 0.5 |
+| Saved items | `SAVED_ITEMS_ENABLED`, `SAVED_ITEMS_LANCEDB_PATH`, `SAVED_ITEMS_WEIGHT`, `SAVED_ITEMS_MIN_QUALITY_FILTER`, `SAVED_ITEMS_WHERE` | false, `~/Projects/shared-data/lancedb`, 0.5, true, unset |
 | Web search | `WEB_SEARCH_ENABLED`, `WEB_SEARCH_WEIGHT`, `WEB_SEARCH_MAX_RESULTS`, `WEB_SEARCH_IN_RESEARCH` | false, 0.7, 5, true |
 | RAPTOR | `ENABLE_RAPTOR`, `RAPTOR_MODE`, `RAPTOR_CHUNK_SIZE`, `RAPTOR_TOP_K` | false, `collapsed`, 1024 (must exceed metadata size), 10 |
 | Federated | `FEDERATED_TOP_K_PER_SOURCE`, `FEDERATED_FINAL_TOP_K` | 100, 120 |

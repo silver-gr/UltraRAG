@@ -62,7 +62,18 @@ class SavedItemsRetriever(BaseRetriever):
         self._top_k = top_k
         self._table = None
         self._validated = False
+        self._where = self._build_where(config)
         super().__init__()
+
+    @staticmethod
+    def _build_where(config: "SavedItemsConfig") -> Optional[str]:
+        """LanceDB predicate from the quality filter and the operator's extra predicate."""
+        clauses = []
+        if config.min_quality_filter:
+            clauses.append("(usefulness_score > 0 OR relevance_score > 0)")
+        if config.where:
+            clauses.append(f"({config.where})")
+        return " AND ".join(clauses) or None
 
     def validate(self) -> bool:
         """Open table and validate embedding dimension. Idempotent (cached after first call)."""
@@ -82,6 +93,7 @@ class SavedItemsRetriever(BaseRetriever):
                 return False
 
             self._table = db.open_table(self._config.table_name)
+            logger.info(f"saved_items predicate: {self._where or 'none'}")
 
             # Validate vector field exists and dimension matches current embed model
             schema = self._table.schema
@@ -128,10 +140,14 @@ class SavedItemsRetriever(BaseRetriever):
                 query_bundle.query_str
             )
 
+            query = self._table.search(query_vector).metric("cosine")
+            if self._where:
+                # Prefilter so filtered-out rows don't use up top_k slots
+                query = query.where(self._where, prefilter=True)
+
             # Search — explicitly exclude heavy vector column, include _distance
             results = (
-                self._table.search(query_vector)
-                .metric("cosine")
+                query
                 .limit(self._top_k)
                 .select(
                     [

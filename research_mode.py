@@ -363,6 +363,11 @@ class ResearchRetriever:
         if not new_nodes:
             return False, 0.0
 
+        # Federated nodes mix score scales (RRF ~0.02, cosine ~0.7), so no single floor applies.
+        # Information gain and query similarity still stop research.
+        if any('native_score' in n.node.metadata for n in new_nodes):
+            return False, 0.0
+
         scores = [n.score or 0.0 for n in new_nodes]
         avg_score = sum(scores) / len(scores)
         should_stop = avg_score < self.config.score_floor
