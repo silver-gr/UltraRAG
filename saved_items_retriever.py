@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections import Counter
 from typing import TYPE_CHECKING, List, Optional
 
 from llama_index.core import Settings
@@ -13,6 +14,10 @@ if TYPE_CHECKING:
     from config import SavedItemsConfig
 
 logger = logging.getLogger(__name__)
+
+# Chunks of one item share a context header and cluster, so a long on-topic item can fill the
+# whole window and leave few distinct items. Fetch further, then cap chunks per item.
+_ITEM_CAP_OVERFETCH = 4
 
 # These models share one embedding space, so a table built with one is valid for the others.
 _VOYAGE_4_FAMILY = {"voyage-4", "voyage-4-large", "voyage-4-lite"}
@@ -70,10 +75,12 @@ class SavedItemsRetriever(BaseRetriever):
         config: "SavedItemsConfig",
         top_k: int = 75,
         embedding_model: Optional[str] = None,
+        max_chunks_per_item: Optional[int] = None,
     ):
         self._config = config
         self._top_k = top_k
         self._embedding_model = embedding_model
+        self._max_chunks_per_item = max_chunks_per_item
         self._has_context = False
         self._table = None
         self._validated = False
@@ -203,7 +210,7 @@ class SavedItemsRetriever(BaseRetriever):
             # Search — explicitly exclude heavy vector column, include _distance
             results = (
                 query
-                .limit(self._top_k)
+                .limit(self._top_k * (_ITEM_CAP_OVERFETCH if self._max_chunks_per_item else 1))
                 .select(
                     [
                         "text",
@@ -227,7 +234,14 @@ class SavedItemsRetriever(BaseRetriever):
             return []
 
         nodes: List[NodeWithScore] = []
+        chunks_per_item: Counter = Counter()
         for _, row in results.iterrows():
+            item_id = _coalesce_str(row.get("item_id"), row.get("url"), fallback="unknown")
+            if self._max_chunks_per_item:
+                if chunks_per_item[item_id] >= self._max_chunks_per_item:
+                    continue
+                chunks_per_item[item_id] += 1
+
             distance = row.get("_distance", None)
             score = 0.0
             if not _is_null(distance):
@@ -238,7 +252,6 @@ class SavedItemsRetriever(BaseRetriever):
                 except Exception:
                     score = 0.0
 
-            item_id = _coalesce_str(row.get("item_id"), row.get("url"), fallback="unknown")
             chunk_index = _safe_int(row.get("chunk_index", 0), default=0)
             domain = _coalesce_str(row.get("domain"), fallback="") or None
             url = _coalesce_str(row.get("url"), fallback="") or None
@@ -269,5 +282,7 @@ class SavedItemsRetriever(BaseRetriever):
             if context:
                 node.metadata["chunk_body"] = body
             nodes.append(NodeWithScore(node=node, score=score))
+            if len(nodes) == self._top_k:
+                break
 
         return nodes

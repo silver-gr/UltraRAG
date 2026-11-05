@@ -570,8 +570,9 @@ class TestEmbeddingModelCheck:
     def test_pipeline_passes_the_configured_model(self, monkeypatch):
         built = {}
 
-        def fake_retriever(config, top_k, embedding_model):
+        def fake_retriever(config, top_k, embedding_model, max_chunks_per_item):
             built["embedding_model"] = embedding_model
+            built["max_chunks_per_item"] = max_chunks_per_item
             return Mock(validate=Mock(return_value=True))
 
         monkeypatch.setattr("saved_items_retriever.SavedItemsRetriever", fake_retriever)
@@ -587,3 +588,58 @@ class TestEmbeddingModelCheck:
         UltraRAG._auto_load_saved_items(rag)
 
         assert built["embedding_model"] == "voyage-4-lite"
+        assert built["max_chunks_per_item"] == RetrievalConfig().federated_max_chunks_per_document
+
+
+class TestLongItemCrowding:
+    """Chunks of one item share a context header, so a long item can fill the whole window."""
+
+    @staticmethod
+    def _retrieve(monkeypatch, rows, top_k=4, max_per_item=2):
+        limits = []
+
+        class Query(StubQuery):
+            def limit(self, value):
+                limits.append(value)
+                return self
+
+            def to_pandas(self):
+                return pd.DataFrame(rows[: limits[-1]])
+
+        table = Mock(search=Mock(return_value=Query()))
+        embed_model = Mock(get_query_embedding=Mock(return_value=[0.0, 0.0, 0.0]))
+        monkeypatch.setattr(
+            "saved_items_retriever.Settings", SimpleNamespace(embed_model=embed_model)
+        )
+        retriever = SavedItemsRetriever(
+            SavedItemsConfig(enabled=True), top_k=top_k, max_chunks_per_item=max_per_item
+        )
+        retriever._table = table
+        retriever._validated = True
+        return retriever._retrieve(QueryBundle("q")), limits
+
+    def test_caps_chunks_per_item_and_fills_top_k_from_other_items(self, monkeypatch):
+        rows = [{**ROW, "item_id": "long", "chunk_index": i} for i in range(9)]
+        rows += [{**ROW, "item_id": f"other{i}", "chunk_index": 0} for i in range(5)]
+
+        nodes, limits = self._retrieve(monkeypatch, rows)
+
+        assert limits[-1] > 4, "must fetch beyond top_k to reach other items"
+        assert [n.node.metadata["document_id"] for n in nodes] == [
+            "long",
+            "long",
+            "other0",
+            "other1",
+        ]
+
+    def test_keeps_rank_order_and_returns_all_when_few_items(self, monkeypatch):
+        rows = [{**ROW, "item_id": "a", "chunk_index": i} for i in range(3)]
+        rows.append({**ROW, "item_id": "b", "chunk_index": 0})
+
+        nodes, _ = self._retrieve(monkeypatch, rows)
+
+        assert [n.node.node_id for n in nodes] == [
+            "saved_items:a:0",
+            "saved_items:a:1",
+            "saved_items:b:0",
+        ]

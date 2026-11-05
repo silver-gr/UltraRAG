@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   iteration for federated research runs.
 
 ### Fixed
+- `SavedItemsRetriever` fetches further and caps chunks per item, so one long item cannot
+  fill the saved-items candidate window.
 - **Federated merge compared incomparable scores**: saved items (cosine, 0.4-0.9) outranked
   every vault, book and conversation chunk (RRF, ~0.02) in the pre-rerank cut to
   `FEDERATED_FINAL_TOP_K`. Sources now merge by rank and share the cut in proportion to their

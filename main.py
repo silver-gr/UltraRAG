@@ -580,6 +580,7 @@ class UltraRAG:
                 config=self.config.saved_items,
                 top_k=self.config.retrieval.federated_top_k_per_source,
                 embedding_model=self.config.embedding.model,
+                max_chunks_per_item=self.config.retrieval.federated_max_chunks_per_document,
             )
             if retriever.validate():
                 self.saved_items_retriever = retriever
