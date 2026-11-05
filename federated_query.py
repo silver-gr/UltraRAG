@@ -23,7 +23,8 @@ from query_engine import (
     PTCF_TEMPLATE,
     REFINE_TEMPLATE,
     QueryTransformRetriever,
-    GraphEnhancedRetriever
+    GraphEnhancedRetriever,
+    RerankScoreThreshold,
 )
 from query_transform import QueryTransformer
 from self_correction import SelfCorrectingRetriever
@@ -117,7 +118,7 @@ def _rerank_steps(reranker, config: RAGConfig) -> list:
     steps = [reranker]
     threshold = config.retrieval.rerank_score_threshold
     if threshold > 0:
-        steps.append(SimilarityPostprocessor(similarity_cutoff=threshold))
+        steps.append(RerankScoreThreshold(similarity_cutoff=threshold, reranker=reranker))
         logger.info(f"Post-rerank threshold: {threshold}")
     return steps
 

@@ -221,6 +221,24 @@ from typing import Any
 from collections import OrderedDict
 
 
+class RerankScoreThreshold(SimilarityPostprocessor):
+    """Post-rerank cutoff that steps aside when the reranker returned unranked nodes.
+
+    TrackedVoyageReranker keeps the original order when the quota is exceeded. Those nodes still
+    carry pre-rerank scores, so the cutoff would silently remove all of them.
+    """
+
+    reranker: Any = None
+
+    def _postprocess_nodes(self, nodes, query_bundle=None):
+        if getattr(self.reranker, "fell_back", False) is True:
+            logger.warning(
+                f"Reranker fell back to unranked results; ignoring score threshold {self.similarity_cutoff}"
+            )
+            return nodes
+        return super()._postprocess_nodes(nodes, query_bundle)
+
+
 class LRUCache:
     """Simple LRU (Least Recently Used) cache for query results."""
 
@@ -869,8 +887,9 @@ class RAGQueryEngine:
         # Post-rerank score threshold (separate scale from cosine similarity)
         if self.reranker and self.config.retrieval.rerank_score_threshold > 0:
             node_postprocessors.append(
-                SimilarityPostprocessor(
-                    similarity_cutoff=self.config.retrieval.rerank_score_threshold
+                RerankScoreThreshold(
+                    similarity_cutoff=self.config.retrieval.rerank_score_threshold,
+                    reranker=self.reranker,
                 )
             )
             logger.info(f"Post-rerank threshold: {self.config.retrieval.rerank_score_threshold}")
@@ -1198,8 +1217,9 @@ class HybridQueryEngine:
         # Post-rerank score threshold (separate scale from cosine similarity)
         if self.reranker and self.config.retrieval.rerank_score_threshold > 0:
             node_postprocessors.append(
-                SimilarityPostprocessor(
-                    similarity_cutoff=self.config.retrieval.rerank_score_threshold
+                RerankScoreThreshold(
+                    similarity_cutoff=self.config.retrieval.rerank_score_threshold,
+                    reranker=self.reranker,
                 )
             )
             logger.info(f"Post-rerank threshold: {self.config.retrieval.rerank_score_threshold}")

@@ -45,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   means one Voyage rerank call per federated query, and one per retrieval in research. Research now
   keeps up to `RERANK_TOP_N` nodes per retrieval instead of `FEDERATED_FINAL_TOP_K`. The eval harness
   measures this same path.
+- **`RERANK_SCORE_THRESHOLD` removed every result when the Voyage quota ran out**: the reranker
+  falls back to unranked nodes that still carry pre-rerank scores. The threshold is now ignored for
+  that call and a warning is logged.
 - **Agent CLI returned "Empty Response"** (`python -m cli query/research`, broken since
   1.6.0). The stateless `retrieval.py` engines were built without a reranker or BM25 nodes,
   so the 0.3 cosine cutoff ran on rank-fused scores and removed every result. They now get

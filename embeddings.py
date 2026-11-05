@@ -125,6 +125,7 @@ class TrackedVoyageReranker:
         self._base = base_reranker
         self._model_name = model_name
         self._tracker = get_tracker()
+        self.fell_back = False  # True when the last call returned unranked nodes
 
     def postprocess_nodes(
         self,
@@ -141,6 +142,7 @@ class TrackedVoyageReranker:
         estimated_tokens = self._tracker.estimate_tokens(all_texts)
 
         can_proceed, msg = self._tracker.check_rerank_quota(estimated_tokens)
+        self.fell_back = not can_proceed
         if not can_proceed:
             logger.warning(f"Rerank quota exceeded, returning unranked results: {msg}")
             # Don't fail, just return original order

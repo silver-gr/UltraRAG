@@ -14,6 +14,7 @@ from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import MetadataMode, NodeWithScore, QueryBundle, TextNode
 
 from config import RetrievalConfig
+from embeddings import TrackedVoyageReranker
 from eval_harness import RetrievalProbe
 from federated_query import FederatedQueryEngine, FederatedRetriever, IndexSource
 from main import UltraRAG
@@ -343,3 +344,44 @@ class TestDownstreamConsumers:
 
         assert research._check_score_floor(_nodes("low", [0.1])) == (True, pytest.approx(0.1))
         assert research._check_score_floor(_nodes("high", [0.8])) == (False, pytest.approx(0.8))
+
+
+class TestQuotaFallbackThreshold:
+    """RERANK_SCORE_THRESHOLD must not remove every node when the reranker fell back."""
+
+    @pytest.fixture
+    def tracked(self, monkeypatch):
+        """A TrackedVoyageReranker whose quota answer the test controls."""
+        tracker = Mock(estimate_tokens=Mock(return_value=1))
+        monkeypatch.setattr("embeddings.get_tracker", lambda: tracker)
+        return TrackedVoyageReranker(StubReranker(), "rerank-3"), tracker
+
+    def test_threshold_is_ignored_and_logged_when_quota_is_exceeded(self, monkeypatch, caplog, tracked):
+        reranker, tracker = tracked
+        tracker.check_rerank_quota.return_value = (False, "over quota")
+        engine = _federated_rag(monkeypatch, reranker, rerank_score_threshold=0.1).federated_engine
+
+        with caplog.at_level(logging.WARNING, logger="query_engine"):
+            nodes = engine.retrieve("q")
+
+        assert len(nodes) == 20
+        assert "ignoring score threshold 0.1" in caplog.text
+
+    def test_threshold_applies_again_once_the_reranker_runs(self, monkeypatch, tracked):
+        reranker, tracker = tracked
+        tracker.check_rerank_quota.return_value = (False, "over quota")
+        engine = _federated_rag(monkeypatch, reranker, rerank_score_threshold=0.1).federated_engine
+        engine.retrieve("q")
+
+        tracker.check_rerank_quota.return_value = (True, "")
+
+        assert [n.score for n in engine.retrieve("q")] == [0.9]
+
+    def test_research_path_has_the_same_guard(self, tracked):
+        reranker, tracker = tracked
+        tracker.check_rerank_quota.return_value = (False, "over quota")
+        retriever = FederatedRetriever(
+            _two_scale_sources(), _config(rerank_score_threshold=0.1), reranker=reranker, parallel=False
+        )
+
+        assert retriever.retrieve(QUERY)
