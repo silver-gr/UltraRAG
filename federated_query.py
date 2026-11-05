@@ -9,6 +9,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from llama_index.core import VectorStoreIndex
+from llama_index.core.postprocessor import SimilarityPostprocessor
 from llama_index.core.schema import NodeWithScore, QueryBundle
 from llama_index.core.retrievers import BaseRetriever, VectorIndexRetriever
 from llama_index.core.query_engine import RetrieverQueryEngine
@@ -105,6 +106,22 @@ Provide a comprehensive answer with inline citations:
 FEDERATED_TEMPLATE = _get_federated_template(["vault", "conversations"])
 
 
+def _rerank_steps(reranker, config: RAGConfig) -> list:
+    """The reranker and its score threshold, as postprocessors.
+
+    Empty without a real reranker. Merged scores are rank-based, so a cosine cutoff would remove
+    every node, and that includes the cosine-cutoff fallback get_reranker can return.
+    """
+    if reranker is None or isinstance(reranker, SimilarityPostprocessor):
+        return []
+    steps = [reranker]
+    threshold = config.retrieval.rerank_score_threshold
+    if threshold > 0:
+        steps.append(SimilarityPostprocessor(similarity_cutoff=threshold))
+        logger.info(f"Post-rerank threshold: {threshold}")
+    return steps
+
+
 @dataclass
 class IndexSource:
     """Represents a source index in the federation."""
@@ -145,7 +162,8 @@ class FederatedRetriever(BaseRetriever):
             sources: List of IndexSource objects to query
             config: RAG configuration
             query_transformer: Optional query transformer
-            reranker: Optional reranker model
+            reranker: Optional reranker, run on the merged candidates of every retrieval. For
+                callers without a FederatedQueryEngine, which runs its own as a postprocessor.
             top_k_per_source: How many results to get from each source (default: config.top_k)
             final_top_k: Final number of results after merge (default: config.top_k)
             parallel: Whether to query sources in parallel
@@ -154,7 +172,8 @@ class FederatedRetriever(BaseRetriever):
         self.sources = sources
         self.config = config
         self.query_transformer = query_transformer
-        self.reranker = reranker
+        self._rerank_steps = _rerank_steps(reranker, config)
+        self.rerank_calls = 0
         self.top_k_per_source = top_k_per_source or config.retrieval.federated_top_k_per_source
         self.final_top_k = final_top_k or config.retrieval.federated_final_top_k
         self.max_chunks_per_document = config.retrieval.federated_max_chunks_per_document
@@ -381,6 +400,13 @@ class FederatedRetriever(BaseRetriever):
         per_source = Counter(n.node.metadata.get('retrieval_source') for n in result_nodes)
         logger.debug(f"Federated final per-source counts: {dict(per_source)}")
 
+        if self._rerank_steps and result_nodes:
+            self.rerank_calls += 1
+            candidates = len(result_nodes)
+            for step in self._rerank_steps:
+                result_nodes = step.postprocess_nodes(result_nodes, query_bundle=query_bundle)
+            logger.info(f"Rerank call {self.rerank_calls}: {candidates} candidates -> {len(result_nodes)} nodes")
+
         return result_nodes
 
     @staticmethod
@@ -470,14 +496,11 @@ class FederatedQueryEngine:
 
     def _build_query_engine(self) -> RetrieverQueryEngine:
         """Build the query engine with federated retriever."""
-        from llama_index.core.postprocessor import SimilarityPostprocessor
-
-        # Create federated retriever
+        # Create federated retriever (the reranker runs below, after the metadata filter)
         federated_retriever = FederatedRetriever(
             sources=self.active_sources,
             config=self.config,
             query_transformer=self.query_transformer,
-            reranker=self.reranker,
             book_filter=self._book_filter,
         )
 
@@ -509,21 +532,11 @@ class FederatedQueryEngine:
             )
             logger.info("Metadata filter enabled for federated engine")
 
-        # No similarity cutoff without a real reranker: merged scores are rank-based, so a cosine
-        # threshold would remove every node. That includes get_reranker's cosine-cutoff fallback.
-        reranker = None if isinstance(self.reranker, SimilarityPostprocessor) else self.reranker
-        if reranker:
-            node_postprocessors.append(reranker)
+        rerank_steps = _rerank_steps(self.reranker, self.config)
+        node_postprocessors.extend(rerank_steps)
+        self._rerank_calls_per_query = 1 if rerank_steps else 0
+        if rerank_steps:
             logger.info("Reranker enabled for federated engine")
-
-        # Post-rerank score threshold (separate scale from cosine similarity)
-        if reranker and self.config.retrieval.rerank_score_threshold > 0:
-            node_postprocessors.append(
-                SimilarityPostprocessor(
-                    similarity_cutoff=self.config.retrieval.rerank_score_threshold
-                )
-            )
-            logger.info(f"Post-rerank threshold: {self.config.retrieval.rerank_score_threshold}")
 
         # Response synthesizer with dynamic prompt based on active sources
         source_types = [s.source_type for s in self.active_sources]
@@ -580,6 +593,7 @@ class FederatedQueryEngine:
 
         try:
             response = self.query_engine.query(query_str)
+            logger.info(f"Rerank calls for this query: {self._rerank_calls_per_query}")
 
             # Add source summary to response metadata
             if hasattr(response, 'source_nodes'):
@@ -622,16 +636,19 @@ class FederatedQueryEngine:
     def retrieve(
         self,
         query_str: str,
-        source_filter: Optional[List[str]] = None
+        source_filter: Optional[List[str]] = None,
+        node_filter=None,
     ) -> List[NodeWithScore]:
         """Retrieve nodes without synthesis (for manual context building).
 
         Args:
             query_str: Query string
             source_filter: Optional list of source names to query
+            node_filter: Optional postprocessor run on the candidates before reranking, so the
+                reranker's top_n cut can't remove the nodes it would keep (e.g. a date filter)
 
         Returns:
-            List of NodeWithScore objects (reranked)
+            List of NodeWithScore objects, reranked when a reranker is configured
         """
         logger.info(f"Federated retrieval (no synthesis): {query_str[:100]}...")
 
@@ -641,10 +658,27 @@ class FederatedQueryEngine:
             self.active_sources = [s for s in self.sources if s.name in source_filter]
             self.query_engine = self._build_query_engine()
 
-        # Use the retriever from the query engine
-        nodes = self.query_engine.retriever.retrieve(query_str)
-        logger.info(f"Retrieved {len(nodes)} nodes for manual synthesis")
+        query_bundle = QueryBundle(query_str=query_str)
+        candidates = self.retrieve_candidates(query_bundle)
+        if node_filter:
+            candidates = node_filter._postprocess_nodes(candidates)
+        nodes = self.rerank_candidates(candidates, query_bundle)
+        rerank_calls = self._rerank_calls_per_query if candidates else 0
+        logger.info(
+            f"Retrieved {len(candidates)} candidates -> {len(nodes)} nodes for manual synthesis "
+            f"(rerank calls for this query: {rerank_calls})"
+        )
         return nodes
+
+    def retrieve_candidates(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
+        """Merged candidates from all sources, before reranking."""
+        return self.query_engine.retriever.retrieve(query_bundle)
+
+    def rerank_candidates(
+        self, candidates: List[NodeWithScore], query_bundle: QueryBundle
+    ) -> List[NodeWithScore]:
+        """Run the engine's metadata filter, reranker and score threshold on merged candidates."""
+        return self.query_engine._apply_node_postprocessors(candidates, query_bundle=query_bundle)
 
     def query_vault_only(self, query_str: str) -> Any:
         """Query only vault sources."""

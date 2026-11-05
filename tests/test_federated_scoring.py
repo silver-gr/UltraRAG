@@ -1,9 +1,11 @@
 """Federated merge: sources with incomparable native scores share the candidate list by rank."""
+import logging
 from collections import Counter
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from pydantic import Field
 from llama_index.core import Settings
 from llama_index.core.llms import MockLLM
 from llama_index.core.postprocessor import SimilarityPostprocessor
@@ -12,7 +14,9 @@ from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.schema import MetadataMode, NodeWithScore, QueryBundle, TextNode
 
 from config import RetrievalConfig
+from eval_harness import RetrievalProbe
 from federated_query import FederatedQueryEngine, FederatedRetriever, IndexSource
+from main import UltraRAG
 from research_mode import ResearchRetriever
 
 pytestmark = pytest.mark.unit
@@ -34,6 +38,25 @@ class StubReranker(BaseNodePostprocessor):
 
     def _postprocess_nodes(self, nodes, query_bundle=None):
         return [NodeWithScore(node=n.node, score=0.9 if i == 0 else 0.05) for i, n in enumerate(nodes)]
+
+
+class RecordingReranker(BaseNodePostprocessor):
+    """Reverses the candidates, so its order can't be mistaken for the merge order."""
+
+    top_n: int = 1000
+    calls: list = Field(default_factory=list)
+
+    def _postprocess_nodes(self, nodes, query_bundle=None):
+        self.calls.append([n.node.node_id for n in nodes])
+        ranked = list(reversed(nodes))[: self.top_n]
+        return [NodeWithScore(node=n.node, score=1.0 - i / 1000) for i, n in enumerate(ranked)]
+
+
+class KeepOnlyRrf(BaseNodePostprocessor):
+    """Stands in for the date filter."""
+
+    def _postprocess_nodes(self, nodes, query_bundle=None):
+        return [n for n in nodes if _origin(n) == "rrf_source"]
 
 
 def _nodes(prefix, scores, same_file=False):
@@ -81,6 +104,106 @@ def _two_scale_sources():
 
 def _origin(node):
     return node.node.metadata["retrieval_source"]
+
+
+def _ids(nodes):
+    return [n.node.node_id for n in nodes]
+
+
+def _federated_rag(monkeypatch, reranker, sources=None, **retrieval):
+    """An UltraRAG with only what query_federated needs."""
+    # MockLLM echoes the prompt, so the answer shows what reached the synthesiser.
+    monkeypatch.setattr(Settings, "_llm", MockLLM())
+    rag = object.__new__(UltraRAG)
+    rag.config = _config(use_self_correction=False, **retrieval)
+    rag.federated_engine = FederatedQueryEngine(
+        sources or _two_scale_sources(), rag.config, reranker=reranker, use_cache=False
+    )
+    return rag
+
+
+class TestRerankerWiring:
+    def test_query_federated_sends_the_reranked_order_to_the_synthesiser(self, monkeypatch):
+        reranker = RecordingReranker()
+        rag = _federated_rag(monkeypatch, reranker)
+
+        result = rag.query_federated("q", max_sources=2)
+
+        assert len(reranker.calls) == 1
+        merged = reranker.calls[0]
+        assert len(merged) == 20, "every candidate reaches the reranker, before the max_sources cut"
+        first, second = (i.replace("-", " chunk ") for i in reversed(merged[-2:]))
+        assert [s["excerpt"] for s in result["sources"]] == [first, second]
+        assert [s["score"] for s in result["sources"]] == [pytest.approx(1.0), pytest.approx(0.999)]
+        answer = result["answer"]
+        assert answer.index(first) < answer.index(second)
+        assert merged[0].replace("-", " chunk ") not in answer
+
+    def test_date_filter_runs_before_the_reranker(self, monkeypatch):
+        reranker = RecordingReranker(top_n=2)
+        rag = _federated_rag(monkeypatch, reranker)
+        monkeypatch.setattr("main.create_temporal_filter", lambda preset: KeepOnlyRrf())
+
+        result = rag.query_federated("q", date_filter="last_week")
+
+        assert all(i.startswith("rrf") for i in reranker.calls[0])
+        assert len(result["sources"]) == 2
+
+    @pytest.mark.parametrize("max_sources, expected", [(None, 30), (25, 25), (40, 30)])
+    def test_source_count_is_capped_by_rerank_top_n(self, monkeypatch, max_sources, expected):
+        sources = [
+            _source("a", _nodes("a", _rrf_scores(25)), 1.0),
+            _source("b", _nodes("b", _rrf_scores(25)), 1.0),
+        ]
+        rag = _federated_rag(monkeypatch, RecordingReranker(top_n=30), sources, rerank_top_n=30)
+
+        result = rag.query_federated("q", max_sources=max_sources)
+
+        assert len(result["sources"]) == expected
+
+    def test_eval_probe_measures_the_production_path(self, monkeypatch):
+        reranker = RecordingReranker()
+        engine = _federated_rag(monkeypatch, reranker).federated_engine
+        probe = object.__new__(RetrievalProbe)
+        probe._vault_engine = object()
+        probe._federated_engine = engine
+
+        result = probe.run("q", scope="federated")
+
+        assert _ids(result.pre_nodes) == reranker.calls[0]
+        assert _ids(result.post_nodes) == _ids(engine.retrieve("q"))
+
+    def test_federated_research_reranks_every_retrieval(self):
+        reranker = RecordingReranker()
+        retriever = FederatedRetriever(
+            _two_scale_sources(), _config(), reranker=reranker, parallel=False
+        )
+
+        first = retriever.retrieve(QUERY)
+        retriever.retrieve(QUERY)
+
+        assert retriever.rerank_calls == 2
+        assert _ids(first) == list(reversed(reranker.calls[0]))
+
+    def test_federated_research_ignores_the_fallback_reranker(self):
+        retriever = FederatedRetriever(
+            _two_scale_sources(),
+            _config(),
+            reranker=SimilarityPostprocessor(similarity_cutoff=0.7),
+            parallel=False,
+        )
+
+        assert retriever.retrieve(QUERY)
+        assert retriever.rerank_calls == 0
+
+    @pytest.mark.parametrize("reranker, calls", [(RecordingReranker(), 1), (None, 0)], ids=["on", "off"])
+    def test_rerank_call_count_is_logged(self, monkeypatch, caplog, reranker, calls):
+        engine = _federated_rag(monkeypatch, reranker).federated_engine
+
+        with caplog.at_level(logging.INFO, logger="federated_query"):
+            engine.retrieve("q")
+
+        assert f"rerank calls for this query: {calls}" in caplog.text
 
 
 class TestRankNormalisedMerge:

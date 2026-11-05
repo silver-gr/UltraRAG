@@ -1638,17 +1638,15 @@ class UltraRAG:
         print("Searching vault and conversations...\n")
 
         try:
-            # Step 1: Retrieve nodes (includes query transformation, reranking)
+            # Step 1: Build the date filter. It runs on the candidates, before the reranker's cut.
+            temporal_filter = create_temporal_filter(preset=date_filter) if date_filter != "all_time" else None
+
+            # Step 2: Retrieve nodes (includes query transformation, reranking)
             all_nodes = self.federated_engine.retrieve(
                 query_str,
-                source_filter=source_filter
+                source_filter=source_filter,
+                node_filter=temporal_filter
             )
-
-            # Step 2: Apply temporal filter if specified
-            if date_filter != "all_time":
-                temporal_filter = create_temporal_filter(preset=date_filter)
-                if temporal_filter:
-                    all_nodes = temporal_filter._postprocess_nodes(all_nodes)
 
             total_retrieved = len(all_nodes)
 

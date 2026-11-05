@@ -96,6 +96,8 @@ stacks - check and test both.
     (`docs/features/FEDERATED_SCORING.md`).
   - RRF is used within a source, for hybrid and multi-query fusion. Across sources only the
     rank-based formula above applies.
+  - The configured reranker then runs on the merged candidates: once per query for
+    `query_federated`, once per retrieval for federated research.
 - **Research:** `research_mode.py` `ResearchRetriever` loops retrieval -> LLM gap analysis
   -> refined sub-queries.
   - It stops at `RESEARCH_CONFIDENCE_THRESHOLD`, or when information gain (new unique

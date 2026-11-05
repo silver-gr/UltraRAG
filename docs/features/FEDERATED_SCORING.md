@@ -18,19 +18,33 @@ score = 1 / (k + rank / weight)      # rank starts at 1, k = RRF_K (60)
   conversations 30 and saved items 18, before deduplication and the per-document cap.
 - A weight of 0 scores every node 0, so the source only fills slots nothing else wants.
 
-Merged scores say nothing about absolute relevance, so don't compare them to a threshold. Only a
-reranker adds that signal, and not every path runs one (see below).
+Merged scores say nothing about absolute relevance, so don't compare them to a threshold. The reranker
+adds that signal.
+
+## The reranker
+
+The configured reranker runs on the merged candidates on every federated path:
+
+| Path | Voyage calls | Keeps |
+|---|---|---|
+| `FederatedQueryEngine.query` (`retrieval.federated_query`) | 1 per query | `RERANK_TOP_N` |
+| `FederatedQueryEngine.retrieve` (`UltraRAG.query_federated`: `@all`, the web app, x3lixi) | 1 per query | `RERANK_TOP_N`, then the caller's `max_sources` |
+| Federated research (`FederatedRetriever(reranker=...)`) | 1 per retrieval | `RERANK_TOP_N` per retrieval |
+
+- Each call reranks up to `FEDERATED_FINAL_TOP_K` chunks. The call count is logged per query. Research
+  logs a running count, one line per retrieval.
+- `max_sources` above `RERANK_TOP_N` returns `RERANK_TOP_N` sources, and `FEDERATED_FINAL_TOP_K` caps
+  both.
+- The date filter in `query_federated` runs on the candidates, before the reranker's cut.
+- `eval_harness.RetrievalProbe` calls the same `retrieve_candidates` and `rerank_candidates` steps
+  as `FederatedQueryEngine.retrieve`, so golden-set scores measure this path.
+
+Vault-only research runs no reranker.
 
 ## Reading scores downstream
 
-| Where | Reranker runs? | `node.score` is |
-|---|---|---|
-| `FederatedQueryEngine.query` (`retrieval.federated_query`) | Yes | Reranker score |
-| `FederatedQueryEngine.retrieve` (`UltraRAG.query_federated`: `@all`, the web app, x3lixi) | No | Merge score |
-| Research mode (`FederatedRetriever` directly) | No | Merge score |
-
-On the two paths without a reranker, the merge order alone decides which nodes get cut. For example,
-`query_federated` keeps the first `RERANK_TOP_N` nodes unless the caller passes `max_sources`.
+`node.score` is the reranker's score after these paths, and the merge score only when no real
+reranker is configured.
 
 The source's own score stays in `node.metadata["native_score"]`, for debugging. It is excluded from
 the text sent to the reranker and the LLM. Native scores still mix scales, so research mode skips its

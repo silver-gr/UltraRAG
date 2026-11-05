@@ -39,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every vault, book and conversation chunk (RRF, ~0.02) in the pre-rerank cut to
   `FEDERATED_FINAL_TOP_K`. Sources now merge by rank and share the cut in proportion to their
   weights. See `docs/features/FEDERATED_SCORING.md`.
+- **`query_federated` never ran the reranker** (`@all`, the web app, x3lixi), although its docs said
+  it did, so rank within each source decided what reached the LLM. It now reranks the merged
+  candidates before the cut to `max_sources`, and federated research reranks each retrieval. That
+  means one Voyage rerank call per federated query, and one per retrieval in research. Research now
+  keeps up to `RERANK_TOP_N` nodes per retrieval instead of `FEDERATED_FINAL_TOP_K`. The eval harness
+  measures this same path.
 - **Agent CLI returned "Empty Response"** (`python -m cli query/research`, broken since
   1.6.0). The stateless `retrieval.py` engines were built without a reranker or BM25 nodes,
   so the 0.3 cosine cutoff ran on rank-fused scores and removed every result. They now get

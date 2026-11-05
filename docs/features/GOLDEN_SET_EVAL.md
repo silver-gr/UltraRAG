@@ -100,6 +100,8 @@ Run it before merging any retrieval change; re-save the baseline when a change i
 as `main.UltraRAG`, then calls the engine's **retriever** (→ pre-rerank candidates) and its
 **node postprocessors** (→ post-rerank) directly. One retrieval pass, no synthesis, no result
 cache. Self-correction and HyDE still run when enabled because they are part of retrieval.
+The federated scope calls `retrieve_candidates` and `rerank_candidates`, the same steps as
+`FederatedQueryEngine.retrieve`, which `UltraRAG.query_federated` uses.
 
 Known limits
 - Research mode (iterative) is not probed; it is an answer-level feature — use RAGAS for it.

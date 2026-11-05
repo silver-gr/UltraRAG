@@ -377,17 +377,23 @@ class RetrievalProbe:
         from llama_index.core.schema import QueryBundle
 
         engine, scope = self._engine(scope)
-        inner = getattr(engine, "query_engine", engine)  # RetrieverQueryEngine
-        retriever = getattr(inner, "retriever", None) or getattr(inner, "_retriever")
         bundle = QueryBundle(query_str=query)
+        if scope == "federated":
+            # The two steps FederatedQueryEngine.retrieve runs for UltraRAG.query_federated
+            retrieve, postprocess = engine.retrieve_candidates, engine.rerank_candidates
+        else:
+            inner = getattr(engine, "query_engine", engine)  # RetrieverQueryEngine
+            retriever = getattr(inner, "retriever", None) or getattr(inner, "_retriever")
+            retrieve = retriever.retrieve
+            postprocess = lambda nodes, query_bundle: self._postprocess(inner, nodes, query_bundle)
 
         timings: Dict[str, float] = {}
         t0 = time.time()
-        pre_nodes = list(retriever.retrieve(bundle))
+        pre_nodes = list(retrieve(bundle))
         timings["retrieve_ms"] = round((time.time() - t0) * 1000, 1)
 
         t0 = time.time()
-        post_nodes = list(self._postprocess(inner, pre_nodes, bundle))
+        post_nodes = list(postprocess(pre_nodes, bundle))
         timings["postprocess_ms"] = round((time.time() - t0) * 1000, 1)
         timings["total_ms"] = round(timings["retrieve_ms"] + timings["postprocess_ms"], 1)
 
