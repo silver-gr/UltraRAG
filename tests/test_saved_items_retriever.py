@@ -277,6 +277,7 @@ class TestTableLookup:
     ):
         self._crowd_store(tmp_path)
         lancedb.connect(str(tmp_path)).create_table("saved_items", data=[TABLE_ROW])
+        monkeypatch.setitem(content_research_engine.TABLE_NAMES, "saved_items", "saved_items")
         monkeypatch.setattr(content_research_engine, "_get_lancedb_path", lambda _source: tmp_path)
 
         results = content_research_engine._search_source(
